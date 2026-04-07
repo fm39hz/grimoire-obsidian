@@ -18,7 +18,7 @@ export class SyncManager {
 	constructor(app: App, api: GrimoireApi, syncFolder: string) {
 		this.api = api;
 		this.structure = new VaultStructure(app, syncFolder);
-		this.fileManager = new FileManager(app, this.structure);
+		this.fileManager = new FileManager(app, this.structure, api);
 		this.pullSync = new PullSync(api, this.fileManager, this.structure);
 		this.state = { status: "idle" };
 	}

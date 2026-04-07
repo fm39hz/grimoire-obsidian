@@ -12,17 +12,19 @@ import {
 	stringifyFrontmatter,
 } from "./frontmatter";
 import { VaultStructure } from "./structure";
+import { joinPath } from "../utils";
 import type {
 	SeriesResponse,
 	VolumeResponse,
 	ChapterResponse,
 } from "../types";
-import { segmentsToMarkdown, descriptionToMarkdown } from "../converter";
+import type { GrimoireApi } from "../api";
 
 export class FileManager {
 	constructor(
 		private app: App,
-		private structure: VaultStructure
+		private structure: VaultStructure,
+		private api?: GrimoireApi
 	) {}
 
 	/**
@@ -43,11 +45,7 @@ export class FileManager {
 			coverImage: series.metadata?.coverImage || undefined,
 		});
 
-		const description = series.metadata?.description
-			? descriptionToMarkdown(series.metadata.description)
-			: "";
-
-		const content = createMarkdownWithFrontmatter(frontmatter, description);
+		const content = createMarkdownWithFrontmatter(frontmatter, series.markdown ?? "");
 
 		await this.writeFile(filePath, content);
 		return filePath;
@@ -104,7 +102,7 @@ export class FileManager {
 			chapter.order
 		);
 
-		const chapterContent = segmentsToMarkdown(chapter.content, chapter.footnotes);
+		const chapterContent = chapter.markdown ?? "";
 		const content = createMarkdownWithFrontmatter(frontmatter, chapterContent);
 
 		await this.writeFile(filePath, content);
@@ -179,5 +177,28 @@ export class FileManager {
 		const normalizedPath = normalizePath(filePath);
 		const file = this.app.vault.getAbstractFileByPath(normalizedPath);
 		return file instanceof TFile;
+	}
+
+	/**
+	 * Download a cover image by asset ID and save it to the given folder
+	 */
+	async downloadCoverImage(assetId: string, folderPath: string, filename: string): Promise<string | null> {
+		if (!this.api) return null;
+
+		try {
+			const buffer = await this.api.files.download(assetId);
+			const normalizedPath = normalizePath(joinPath(folderPath, filename));
+			const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
+
+			if (existing instanceof TFile) {
+				await this.app.vault.modifyBinary(existing, buffer);
+			} else {
+				await this.app.vault.createBinary(normalizedPath, buffer);
+			}
+
+			return filename;
+		} catch {
+			return null;
+		}
 	}
 }

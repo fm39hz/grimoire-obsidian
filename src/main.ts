@@ -110,7 +110,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 	/**
 	 * Pull all series from the API
 	 */
-	private async pullAll() {
+	async pullAll() {
 		if (!this.ensureApiConfigured()) return;
 
 		const progressModal = new SyncProgressModal(this.app);

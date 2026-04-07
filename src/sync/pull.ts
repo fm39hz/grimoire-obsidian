@@ -2,15 +2,11 @@
  * Pull sync - Fetch content from Grimoire API and write to vault
  */
 
-import { Notice } from "obsidian";
 import type { GrimoireApi } from "../api";
 import type { FileManager, VaultStructure } from "../vault";
 import type {
-	SeriesResponse,
 	VolumeResponse,
-	ChapterResponse,
 	SyncResult,
-	PullOptions,
 } from "../types";
 
 export interface PullProgress {
@@ -108,7 +104,7 @@ export class PullSync {
 
 		try {
 			// Fetch series details
-			const series = await this.api.series.get(seriesId);
+			const series = await this.api.series.get(seriesId, { markdown: true });
 
 			if (!series.id || !series.title) {
 				throw new Error("Invalid series data");
@@ -118,6 +114,14 @@ export class PullSync {
 			await this.fileManager.writeSeriesFile(series);
 			if (result.pulled) {
 				result.pulled.series = 1;
+			}
+
+			// Download series cover image if available
+			const coverImageId = series.metadata?.coverImage;
+			if (coverImageId) {
+				const seriesFolderPath = this.structure.getSeriesFolderPath(series.title);
+				const filename = this.extractCoverFilename(coverImageId);
+				await this.fileManager.downloadCoverImage(coverImageId, seriesFolderPath, filename);
 			}
 
 			// Fetch volumes for this series
@@ -190,6 +194,14 @@ export class PullSync {
 				result.pulled.volumes = 1;
 			}
 
+			// Download volume cover image if available
+			const volumeCoverId = volume.metadata?.coverImage;
+			if (volumeCoverId) {
+				const volumeFolderPath = this.structure.getVolumeFolderPath(seriesTitle, volume.title, volume.order);
+				const filename = this.extractCoverFilename(volumeCoverId);
+				await this.fileManager.downloadCoverImage(volumeCoverId, volumeFolderPath, filename);
+			}
+
 			// Fetch chapters for this volume
 			const chapterList = await this.api.volumes.getAllChapters(volume.id);
 
@@ -214,7 +226,7 @@ export class PullSync {
 
 				try {
 					// Fetch full chapter with content
-					const chapter = await this.api.chapters.get(chapterInfo.id);
+					const chapter = await this.api.chapters.get(chapterInfo.id, { markdown: true });
 
 					if (!chapter.id || !chapter.title) {
 						throw new Error("Invalid chapter data");
@@ -239,5 +251,13 @@ export class PullSync {
 		}
 
 		return result;
+	}
+
+	/**
+	 * Extract filename from a cover image asset path
+	 */
+	private extractCoverFilename(assetPath: string): string {
+		const parts = assetPath.replace(/\\/g, "/").split("/");
+		return parts[parts.length - 1] || "cover.jpg";
 	}
 }

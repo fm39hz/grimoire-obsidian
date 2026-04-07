@@ -83,6 +83,21 @@ export class VolumesApi {
 	 * Get all chapters for a volume
 	 */
 	async getAllChapters(volumeId: string): Promise<ChapterListResponse[]> {
-		return this.getChapters(volumeId, { pageSize: 1000 });
+		const allChapters: ChapterListResponse[] = [];
+		let pageIndex = 1;
+		const pageSize = 50;
+
+		while (true) {
+			const result = await this.getChapters(volumeId, { pageIndex, pageSize });
+			if (result && result.length > 0) {
+				allChapters.push(...result);
+			}
+			if (result.length < pageSize) {
+				break;
+			}
+			pageIndex++;
+		}
+
+		return allChapters;
 	}
 }

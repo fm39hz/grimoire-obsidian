@@ -35,8 +35,11 @@ export class ChaptersApi {
 	/**
 	 * Get a single chapter by ID (includes full content)
 	 */
-	async get(id: string): Promise<ChapterResponse> {
-		return this.client.get<ChapterResponse>(`/api/v1/chapters/${id}`);
+	async get(id: string, options?: { markdown?: boolean; timestamp?: boolean }): Promise<ChapterResponse> {
+		return this.client.get<ChapterResponse>(`/api/v1/chapters/${id}`, {
+			markdown: options?.markdown,
+			timestamp: options?.timestamp,
+		});
 	}
 
 	/**

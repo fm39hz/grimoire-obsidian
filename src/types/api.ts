@@ -64,6 +64,7 @@ export interface SeriesResponse {
 	id: string | null;
 	title: string | null;
 	metadata?: SeriesMetadata | null;
+	markdown?: string | null;
 }
 
 export interface CreateSeriesRequest {
@@ -125,6 +126,7 @@ export interface ChapterResponse {
 	title: string | null;
 	content: Segment[] | null;
 	footnotes: FootnoteSegment[] | null;
+	markdown?: string | null;
 }
 
 export interface CreateChapterRequest {

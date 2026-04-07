@@ -16,60 +16,6 @@ export interface ParsedFootnotes {
 }
 
 /**
- * Convert FootnoteSegment array to markdown footnote definitions
- * Returns the footnote definition block to append at the end of the document
- */
-export function footnotesToMarkdown(footnotes: FootnoteSegment[] | null): string {
-	if (!footnotes || footnotes.length === 0) {
-		return "";
-	}
-
-	const lines: string[] = [];
-
-	for (const footnote of footnotes) {
-		if (!footnote.id) continue;
-
-		const content = footnoteSegmentsToText(footnote.segments);
-		lines.push(`[^${footnote.id}]: ${content}`);
-	}
-
-	return lines.length > 0 ? "\n\n" + lines.join("\n") : "";
-}
-
-/**
- * Convert footnote segments (TextSegment[]) to plain text with formatting
- */
-function footnoteSegmentsToText(segments: TextSegment[] | null): string {
-	if (!segments || segments.length === 0) {
-		return "";
-	}
-
-	return segments
-		.map((segment) => {
-			if (!segment.runs) return "";
-			return segment.runs.map((run) => formatTextRun(run)).join("");
-		})
-		.join(" ");
-}
-
-/**
- * Format a single TextRun with markdown formatting
- */
-function formatTextRun(run: TextRun): string {
-	let text = run.text || "";
-
-	if (run.isBold && run.isItalic) {
-		text = `***${text}***`;
-	} else if (run.isBold) {
-		text = `**${text}**`;
-	} else if (run.isItalic) {
-		text = `*${text}*`;
-	}
-
-	return text;
-}
-
-/**
  * Parse markdown content to extract footnote definitions
  * Returns the content without footnote definitions and a map of footnotes
  */

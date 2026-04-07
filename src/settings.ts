@@ -75,6 +75,36 @@ export class GrimoireSyncSettingTab extends PluginSettingTab {
 					})
 			);
 
+		// Sync actions section
+		new Setting(containerEl).setName("Sync").setHeading();
+
+		new Setting(containerEl)
+			.setName("Pull all series")
+			.setDesc("Download all series, volumes, and chapters from Grimoire")
+			.addButton((button) =>
+				button
+					.setButtonText("Pull all")
+					.setCta()
+					.onClick(async () => {
+						button.setDisabled(true);
+						button.setButtonText("Pulling...");
+						try {
+							await this.plugin.pullAll();
+							button.setButtonText("Done!");
+							setTimeout(() => {
+								button.setButtonText("Pull all");
+								button.setDisabled(false);
+							}, 2000);
+						} catch {
+							button.setButtonText("Failed");
+							setTimeout(() => {
+								button.setButtonText("Pull all");
+								button.setDisabled(false);
+							}, 2000);
+						}
+					})
+			);
+
 		// Connection test section
 		new Setting(containerEl).setName("Connection").setHeading();
 
