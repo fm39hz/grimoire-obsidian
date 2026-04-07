@@ -1,8 +1,103 @@
 /*
+ * Grimoire Sync Plugin Styles
+ */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+/* Series Selection Modal */
+.grimoire-series-list {
+	max-height: 400px;
+	overflow-y: auto;
+	margin: 1em 0;
+}
 
-If your plugin does not need CSS, delete this file.
+.grimoire-series-item {
+	border-bottom: 1px solid var(--background-modifier-border);
+	padding: 0.5em 0;
+}
 
-*/
+.grimoire-series-item:last-child {
+	border-bottom: none;
+}
+
+/* Sync Progress Modal */
+.grimoire-sync-progress {
+	min-width: 400px;
+}
+
+.grimoire-progress-phase {
+	font-weight: bold;
+	margin-bottom: 1em;
+	font-size: 1.1em;
+}
+
+.grimoire-progress-phase.grimoire-error {
+	color: var(--text-error);
+}
+
+.grimoire-progress-container {
+	background: var(--background-modifier-border);
+	border-radius: 4px;
+	height: 8px;
+	overflow: hidden;
+	margin-bottom: 1em;
+}
+
+.grimoire-progress-bar {
+	height: 100%;
+	width: 100%;
+}
+
+.grimoire-progress-fill {
+	height: 100%;
+	background: var(--interactive-accent);
+	transition: width 0.3s ease;
+	width: 0%;
+}
+
+.grimoire-progress-fill.grimoire-error {
+	background: var(--text-error);
+}
+
+.grimoire-progress-message {
+	color: var(--text-muted);
+	font-size: 0.9em;
+	margin-bottom: 1em;
+}
+
+.grimoire-progress-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.5em;
+	margin-top: 1em;
+}
+
+/* Status Bar */
+.grimoire-status-bar {
+	display: flex;
+	align-items: center;
+	gap: 0.5em;
+}
+
+.grimoire-status-icon {
+	font-size: 0.9em;
+}
+
+.grimoire-status-text {
+	font-size: 0.85em;
+}
+
+.grimoire-status-bar.grimoire-syncing .grimoire-status-icon {
+	animation: grimoire-pulse 1s infinite;
+}
+
+.grimoire-status-bar.grimoire-error .grimoire-status-text {
+	color: var(--text-error);
+}
+
+@keyframes grimoire-pulse {
+	0%, 100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.5;
+	}
+}

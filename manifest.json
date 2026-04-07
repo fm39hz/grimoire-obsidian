@@ -1,11 +1,10 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
+	"id": "grimoire-sync",
+	"name": "Grimoire Sync",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Sync ebook content (Series, Volumes, Chapters) between Obsidian and Grimoire backend API.",
+	"author": "fm39hz",
+	"authorUrl": "https://github.com/fm39hz",
 	"isDesktopOnly": false
 }

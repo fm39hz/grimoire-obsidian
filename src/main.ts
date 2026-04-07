@@ -1,99 +1,233 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+/**
+ * Grimoire Sync - Obsidian Plugin
+ * Sync ebook content (Series, Volumes, Chapters) with Grimoire backend API
+ */
 
-// Remember to rename these classes and interfaces!
+import { Notice, Plugin } from "obsidian";
+import { GrimoireApi } from "./api";
+import { SyncManager } from "./sync";
+import { SeriesSelectionModal, SyncProgressModal, SyncStatusBar } from "./ui";
+import { DEFAULT_SETTINGS, GrimoireSyncSettings, GrimoireSyncSettingTab } from "./settings";
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class GrimoireSyncPlugin extends Plugin {
+	settings: GrimoireSyncSettings = DEFAULT_SETTINGS;
+	private api: GrimoireApi | null = null;
+	private syncManager: SyncManager | null = null;
+	private statusBar: SyncStatusBar | null = null;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+		// Initialize API client if configured
+		this.initializeApi();
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+		// Add status bar item
+		const statusBarEl = this.addStatusBarItem();
+		this.statusBar = new SyncStatusBar(statusBarEl);
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+		// Register commands
+		this.registerCommands();
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
-		});
+		// Add settings tab
+		this.addSettingTab(new GrimoireSyncSettingTab(this.app, this));
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		console.log("Grimoire Sync plugin loaded");
 	}
 
 	onunload() {
+		console.log("Grimoire Sync plugin unloaded");
 	}
 
+	/**
+	 * Initialize or reinitialize the API client
+	 */
+	private initializeApi() {
+		if (this.settings.apiBaseUrl) {
+			this.api = new GrimoireApi({ baseUrl: this.settings.apiBaseUrl });
+			this.syncManager = new SyncManager(this.app, this.api, this.settings.syncFolder);
+		} else {
+			this.api = null;
+			this.syncManager = null;
+		}
+	}
+
+	/**
+	 * Register plugin commands
+	 */
+	private registerCommands() {
+		// Pull all series
+		this.addCommand({
+			id: "pull-all",
+			name: "Pull all series from Grimoire",
+			callback: () => this.pullAll(),
+		});
+
+		// Pull specific series
+		this.addCommand({
+			id: "pull-series",
+			name: "Pull a specific series from Grimoire",
+			callback: () => this.pullSeriesWithModal(),
+		});
+	}
+
+	/**
+	 * Load plugin settings
+	 */
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 
+	/**
+	 * Save plugin settings
+	 */
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
+		// Reinitialize API with new settings
+		this.initializeApi();
+		if (this.syncManager) {
+			this.syncManager.configure(this.settings.syncFolder);
+		}
 	}
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
+	/**
+	 * Test connection to the API
+	 */
+	async testConnection(): Promise<void> {
+		if (!this.api || !this.syncManager) {
+			new Notice("Please configure the API URL first");
+			throw new Error("API not configured");
+		}
+
+		const success = await this.syncManager.testConnection();
+		if (success) {
+			new Notice("Connection successful!");
+		} else {
+			new Notice("Connection failed. Please check the API URL.");
+			throw new Error("Connection failed");
+		}
+	}
+
+	/**
+	 * Pull all series from the API
+	 */
+	private async pullAll() {
+		if (!this.ensureApiConfigured()) return;
+
+		const progressModal = new SyncProgressModal(this.app);
+		progressModal.open();
+
+		try {
+			const result = await this.syncManager!.pullAll((progress) => {
+				progressModal.updateProgress(progress);
+				this.statusBar?.update({
+					status: "pulling",
+					progress: {
+						current: progress.current,
+						total: progress.total,
+						message: progress.message,
+					},
+				});
+			});
+
+			if (result.success) {
+				const message = `Pulled ${result.pulled?.series || 0} series, ${result.pulled?.volumes || 0} volumes, ${result.pulled?.chapters || 0} chapters`;
+				progressModal.showComplete(true, message);
+				new Notice(message);
+			} else {
+				const errorMsg = result.errors.slice(0, 3).join("\n");
+				progressModal.showComplete(false, errorMsg);
+				new Notice(`Sync failed: ${result.errors[0]}`);
+			}
+
+			this.statusBar?.update(this.syncManager!.getState());
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Unknown error";
+			progressModal.showComplete(false, message);
+			new Notice(`Sync error: ${message}`);
+			this.statusBar?.update({ status: "error", error: message });
+		}
+	}
+
+	/**
+	 * Show modal to select a series and pull it
+	 */
+	private async pullSeriesWithModal() {
+		if (!this.ensureApiConfigured()) return;
+
+		try {
+			new Notice("Fetching series list...");
+			const seriesList = await this.syncManager!.getSeriesList();
+
+			const modal = new SeriesSelectionModal(this.app, seriesList, async (selected) => {
+				if (!selected) return;
+
+				if (selected.id === "__ALL__") {
+					// Pull all series
+					await this.pullAll();
+				} else if (selected.id) {
+					// Pull specific series
+					await this.pullSingleSeries(selected.id, selected.title || "Unknown");
+				}
+			});
+
+			modal.open();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Unknown error";
+			new Notice(`Failed to fetch series: ${message}`);
+		}
+	}
+
+	/**
+	 * Pull a single series by ID
+	 */
+	private async pullSingleSeries(seriesId: string, seriesTitle: string) {
+		if (!this.ensureApiConfigured()) return;
+
+		const progressModal = new SyncProgressModal(this.app);
+		progressModal.open();
+
+		try {
+			new Notice(`Pulling series: ${seriesTitle}`);
+
+			const result = await this.syncManager!.pullSeries(seriesId, (progress) => {
+				progressModal.updateProgress(progress);
+				this.statusBar?.update({
+					status: "pulling",
+					progress: {
+						current: progress.current,
+						total: progress.total,
+						message: progress.message,
+					},
+				});
+			});
+
+			if (result.success) {
+				const message = `Pulled ${result.pulled?.volumes || 0} volumes, ${result.pulled?.chapters || 0} chapters`;
+				progressModal.showComplete(true, message);
+				new Notice(`${seriesTitle}: ${message}`);
+			} else {
+				const errorMsg = result.errors.slice(0, 3).join("\n");
+				progressModal.showComplete(false, errorMsg);
+				new Notice(`Failed to pull ${seriesTitle}: ${result.errors[0]}`);
+			}
+
+			this.statusBar?.update(this.syncManager!.getState());
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Unknown error";
+			progressModal.showComplete(false, message);
+			new Notice(`Sync error: ${message}`);
+			this.statusBar?.update({ status: "error", error: message });
+		}
+	}
+
+	/**
+	 * Check if API is configured and show notice if not
+	 */
+	private ensureApiConfigured(): boolean {
+		if (!this.api || !this.syncManager) {
+			new Notice("Please configure the Grimoire API URL in settings first");
+			return false;
+		}
+		return true;
 	}
 }
