@@ -97,8 +97,8 @@ export class SeriesApi {
 			sortBy?: string;
 			sortDescending?: boolean;
 		}
-	): Promise<VolumeResponse[]> {
-		return this.client.get<VolumeResponse[]>(`/api/v1/series/${seriesId}/volumes`, {
+	): Promise<PagedResult<VolumeResponse>> {
+		return this.client.get<PagedResult<VolumeResponse>>(`/api/v1/series/${seriesId}/volumes`, {
 			pageIndex: options?.pageIndex,
 			pageSize: options?.pageSize,
 			sortBy: options?.sortBy,
@@ -116,10 +116,10 @@ export class SeriesApi {
 
 		while (true) {
 			const result = await this.getVolumes(seriesId, { pageIndex, pageSize });
-			if (result && result.length > 0) {
-				allVolumes.push(...result);
+			if (result.items) {
+				allVolumes.push(...result.items);
 			}
-			if (result.length < pageSize) {
+			if (!result.hasNextPage) {
 				break;
 			}
 			pageIndex++;

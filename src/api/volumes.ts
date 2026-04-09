@@ -70,8 +70,8 @@ export class VolumesApi {
 			sortBy?: string;
 			sortDescending?: boolean;
 		}
-	): Promise<ChapterListResponse[]> {
-		return this.client.get<ChapterListResponse[]>(`/api/v1/volumes/${volumeId}/chapters`, {
+	): Promise<PagedResult<ChapterListResponse>> {
+		return this.client.get<PagedResult<ChapterListResponse>>(`/api/v1/volumes/${volumeId}/chapters`, {
 			pageIndex: options?.pageIndex,
 			pageSize: options?.pageSize,
 			sortBy: options?.sortBy,
@@ -89,10 +89,10 @@ export class VolumesApi {
 
 		while (true) {
 			const result = await this.getChapters(volumeId, { pageIndex, pageSize });
-			if (result && result.length > 0) {
-				allChapters.push(...result);
+			if (result.items) {
+				allChapters.push(...result.items);
 			}
-			if (result.length < pageSize) {
+			if (!result.hasNextPage) {
 				break;
 			}
 			pageIndex++;

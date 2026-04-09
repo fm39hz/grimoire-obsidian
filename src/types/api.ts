@@ -43,6 +43,12 @@ export interface TextSegment extends Segment {
 	runs: TextRun[] | null;
 }
 
+export interface ImageSegment extends Segment {
+	src: string | null;
+	width: number | null;
+	height: number | null;
+}
+
 export interface FootnoteSegment {
 	id: string | null;
 	segments: TextSegment[] | null;
@@ -119,12 +125,14 @@ export interface ChapterListResponse {
 	title: string | null;
 }
 
+export type ContentSegment = TextSegment | ImageSegment;
+
 export interface ChapterResponse {
 	id: string | null;
 	volumeId: string | null;
 	order: number;
 	title: string | null;
-	content: Segment[] | null;
+	content: ContentSegment[] | null;
 	footnotes: FootnoteSegment[] | null;
 	markdown?: string | null;
 }

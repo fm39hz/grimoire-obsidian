@@ -132,6 +132,13 @@ export class VaultStructure {
 	}
 
 	/**
+	 * Get the path for a series's images folder.
+	 */
+	getSeriesImagesPath(seriesTitle: string): string {
+		return joinPath(this.getSeriesFolderPath(seriesTitle), "images");
+	}
+
+	/**
 	 * Create the folder structure for a series
 	 */
 	async createSeriesFolder(seriesTitle: string): Promise<string> {

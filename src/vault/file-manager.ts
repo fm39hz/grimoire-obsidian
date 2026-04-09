@@ -179,6 +179,30 @@ export class FileManager {
 		return file instanceof TFile;
 	}
 
+	async downloadImage(assetId: string, seriesTitle: string): Promise<string | null> {
+		if (!this.api) {
+			return null;
+		}
+
+		try {
+			const buffer = await this.api.files.download(assetId);
+			const filename = assetId;
+			const folderPath = this.structure.getSeriesImagesPath(seriesTitle);
+			const normalizedPath = normalizePath(joinPath(folderPath, filename));
+			const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
+			if (existing instanceof TFile) {
+				await this.app.vault.modifyBinary(existing, buffer);
+			} else {
+				await this.app.vault.createBinary(normalizedPath, buffer);
+			}
+
+			return normalizedPath;
+		} catch (e) {
+			console.error(e);
+			return null;
+		}
+	}
+
 	/**
 	 * Download a cover image by asset ID and save it to the given folder
 	 */
