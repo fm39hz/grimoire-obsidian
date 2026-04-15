@@ -35,10 +35,18 @@ export class ChaptersApi {
 	/**
 	 * Get a single chapter by ID (includes full content)
 	 */
-	async get(id: string, options?: { markdown?: boolean; timestamp?: boolean }): Promise<ChapterResponse> {
+	async get(id: string, options?: { timestamp?: boolean }): Promise<ChapterResponse> {
 		return this.client.get<ChapterResponse>(`/api/v1/chapters/${id}`, {
-			markdown: options?.markdown,
 			timestamp: options?.timestamp,
+		});
+	}
+
+	/**
+	 * Get chapter content in the specified format
+	 */
+	async getContent(id: string, format: string = "markdown"): Promise<{ content: string | null; contentType: string | null }> {
+		return this.client.get<{ content: string | null; contentType: string | null }>(`/api/v1/chapters/${id}/content`, {
+			format
 		});
 	}
 

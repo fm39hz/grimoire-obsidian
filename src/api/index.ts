@@ -2,7 +2,7 @@
  * API module index - Exports unified API interface
  */
 
-import { ApiClient, ApiClientConfig, ApiError } from "./client";
+import { ApiClient, ApiClientConfig } from "./client";
 import { SeriesApi } from "./series";
 import { VolumesApi } from "./volumes";
 import { ChaptersApi } from "./chapters";

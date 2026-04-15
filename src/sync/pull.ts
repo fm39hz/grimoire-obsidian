@@ -13,8 +13,13 @@ import type {
 	SeriesResponse,
 	VolumeResponse,
 	ChapterListResponse,
+	ChapterResponse,
 	SyncResult,
+	ImageSegment,
+	Segment,
 } from "../types";
+import { App, TFile } from "obsidian";
+import { joinPath } from "../utils";
 
 export interface PullProgress {
 	phase: "series" | "volumes" | "chapters";
@@ -43,7 +48,8 @@ export class PullSync {
 	constructor(
 		private api: GrimoireApi,
 		private fileManager: FileManager,
-		private structure: VaultStructure
+		private structure: VaultStructure,
+		private app: App
 	) {}
 
 	/**
@@ -70,7 +76,7 @@ export class PullSync {
 				message: "Fetching series list...",
 			});
 
-			const seriesList = await this.api.series.listAll({ markdown: true });
+			const seriesList = await this.api.series.listAll();
 
 			onProgress?.({
 				phase: "series",
@@ -93,6 +99,12 @@ export class PullSync {
 				});
 
 				try {
+					// Fetch series content separately
+					const contentResponse = await this.api.series.getContent(series.id);
+					if (contentResponse?.content) {
+						series.markdown = contentResponse.content;
+					}
+
 					await this.syncSeriesFile(series);
 					syncedSeries.push({ id: series.id, title: series.title });
 					if (result.pulled) {
@@ -200,11 +212,20 @@ export class PullSync {
 					});
 
 					try {
-						// Fetch full chapter with content
-						const chapter = await this.api.chapters.get(chapterInfo.id, { markdown: true });
+						// Fetch full chapter metadata
+						const chapter = await this.api.chapters.get(chapterInfo.id);
+						
+						// Fetch chapter content in markdown format
+						const contentResponse = await this.api.chapters.getContent(chapterInfo.id);
+						if (contentResponse?.content) {
+							chapter.markdown = contentResponse.content;
+						}
+						
+						// Process images in the chapter
+						const processedChapter = await this.processChapterImages(chapter, volume.seriesTitle);
 
 						await this.fileManager.writeChapterFile(
-							chapter,
+							processedChapter,
 							volume.seriesTitle,
 							volume.title,
 							volume.order
@@ -241,7 +262,13 @@ export class PullSync {
 
 		try {
 			// === PHASE 1: Sync series ===
-			const series = await this.api.series.get(seriesId, { markdown: true });
+			const series = await this.api.series.get(seriesId);
+
+			// Fetch series content in markdown format
+			const contentResponse = await this.api.series.getContent(seriesId);
+			if (contentResponse?.content) {
+				series.markdown = contentResponse.content;
+			}
 
 			if (!series.id || !series.title) {
 				throw new Error("Invalid series data");
@@ -337,10 +364,19 @@ export class PullSync {
 					});
 
 					try {
-						const chapter = await this.api.chapters.get(chapterInfo.id, { markdown: true });
+						const chapter = await this.api.chapters.get(chapterInfo.id);
+						
+						// Fetch chapter content in markdown format
+						const contentResponse = await this.api.chapters.getContent(chapterInfo.id);
+						if (contentResponse?.content) {
+							chapter.markdown = contentResponse.content;
+						}
+						
+						// Process images in the chapter
+						const processedChapter = await this.processChapterImages(chapter, volume.seriesTitle);
 
 						await this.fileManager.writeChapterFile(
-							chapter,
+							processedChapter,
 							volume.seriesTitle,
 							volume.title,
 							volume.order
@@ -407,6 +443,131 @@ export class PullSync {
 			const filename = this.extractCoverFilename(volumeCoverId);
 			await this.fileManager.downloadCoverImage(volumeCoverId, volumeFolderPath, filename);
 		}
+	}
+
+	/**
+	 * Process image segments in a chapter: download images and update references
+	 */
+	private async processChapterImages(
+		chapter: ChapterResponse,
+		seriesTitle: string
+	): Promise<ChapterResponse> {
+		if (!chapter.content || chapter.content.length === 0) {
+			return chapter;
+		}
+
+		// Process each segment to find image segments
+		const updatedContentPromises = chapter.content.map(async (segment) => {
+			// Check if this is an image segment
+			if (this.isImageSegment(segment)) {
+				const imageSegment = segment;
+				const src = imageSegment.src;
+				
+				if (src) {
+					// Extract asset ID from the src (assuming it's in the format of an asset ID)
+					const assetId = this.extractAssetIdFromSrc(src);
+					if (assetId) {
+						// Download the image and get the local path
+						return await this.downloadAndUpdateImageReference(
+							assetId,
+							seriesTitle,
+							imageSegment
+						);
+					}
+				}
+			}
+			// Return unchanged segment if not an image or no src
+			return segment;
+		});
+
+		// Wait for all promises to resolve
+		const updatedContent = await Promise.all(updatedContentPromises);
+
+		// Return chapter with updated content
+		return {
+			...chapter,
+			content: updatedContent
+		};
+	}
+
+	/**
+	 * Check if a segment is an image segment
+	 */
+	private isImageSegment(segment: Segment): segment is ImageSegment {
+		return 'src' in segment && 'width' in segment && 'height' in segment;
+	}
+
+	/**
+	 * Extract asset ID from image src (implementation depends on how assets are referenced)
+	 */
+	private extractAssetIdFromSrc(src: string): string | null {
+		// If src is already an asset ID (UUID), return it directly
+		if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(src)) {
+			return src;
+		}
+		
+		// If src is a URL like /api/v1/files/{assetId}, extract the ID
+		const match = src.match(/\/api\/v1\/files\/(.+)$/);
+		if (match && match[1]) {
+			return match[1];
+		}
+		
+		// If src is just a filename, we might need to look it up differently
+		// For now, return null to indicate we couldn't extract an ID
+		return null;
+	}
+
+	/**
+	 * Download an image and update its reference to point to local path
+	 */
+	private async downloadAndUpdateImageReference(
+		assetId: string,
+		seriesTitle: string,
+		imageSegment: ImageSegment
+	): Promise<ImageSegment> {
+		try {
+			// Download the image
+			const buffer = await this.api.files.download(assetId);
+			
+			// Generate a filename (use asset ID or extract from original src if possible)
+			const filename = this.extractFilenameFromSrc(imageSegment.src) ?? `${assetId}.bin`;
+			
+			// Save to series images folder
+			const imagesFolderPath = this.structure.getSeriesImagesPath(seriesTitle);
+			const normalizedPath = joinPath(imagesFolderPath, filename);
+			
+			const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
+			if (existing instanceof TFile) {
+				await this.app.vault.modifyBinary(existing, buffer);
+			} else {
+				await this.app.vault.createBinary(normalizedPath, buffer);
+			}
+			
+			// Return updated image segment with local path
+			return {
+				...imageSegment,
+				src: normalizedPath
+			};
+		} catch (error) {
+			console.error(`Failed to download image ${assetId}:`, error);
+			// Return original segment if download fails
+			return imageSegment;
+		}
+	}
+
+	/**
+	 * Extract filename from src URL or path
+	 */
+	private extractFilenameFromSrc(src: string | null): string | null {
+		if (!src) return null;
+		
+		// Handle URLs like /api/v1/files/asset-id (no filename in URL)
+		// Handle paths like /path/to/image.jpg
+		const normalizedSrc = src.replace(/\\/g, "/");
+		const parts = normalizedSrc.split("/");
+		const filename = parts[parts.length - 1];
+		
+		return filename && filename !== "" ? filename : null;
 	}
 
 	/**

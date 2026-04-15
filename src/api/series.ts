@@ -22,27 +22,25 @@ export class SeriesApi {
 		pageSize?: number;
 		sortBy?: string;
 		sortDescending?: boolean;
-		markdown?: boolean;
 	}): Promise<PagedResult<SeriesResponse>> {
 		return this.client.get<PagedResult<SeriesResponse>>("/api/v1/series", {
 			pageIndex: options?.pageIndex,
 			pageSize: options?.pageSize,
 			sortBy: options?.sortBy,
 			sortDescending: options?.sortDescending,
-			markdown: options?.markdown,
 		});
 	}
 
 	/**
 	 * Get all series (handles pagination automatically)
 	 */
-	async listAll(options?: { markdown?: boolean }): Promise<SeriesResponse[]> {
+	async listAll(): Promise<SeriesResponse[]> {
 		const allSeries: SeriesResponse[] = [];
 		let pageIndex = 1;
 		const pageSize = 50;
 
 		while (true) {
-			const result = await this.list({ pageIndex, pageSize, markdown: options?.markdown });
+			const result = await this.list({ pageIndex, pageSize });
 			if (result.items) {
 				allSeries.push(...result.items);
 			}
@@ -58,10 +56,18 @@ export class SeriesApi {
 	/**
 	 * Get a single series by ID
 	 */
-	async get(id: string, options?: { markdown?: boolean; timestamp?: boolean }): Promise<SeriesResponse> {
+	async get(id: string, options?: { timestamp?: boolean }): Promise<SeriesResponse> {
 		return this.client.get<SeriesResponse>(`/api/v1/series/${id}`, {
-			markdown: options?.markdown,
 			timestamp: options?.timestamp,
+		});
+	}
+
+	/**
+	 * Get series content in the specified format
+	 */
+	async getContent(id: string, format: string = "markdown"): Promise<{ content: string | null; contentType: string | null }> {
+		return this.client.get<{ content: string | null; contentType: string | null }>(`/api/v1/series/${id}/content`, {
+			format
 		});
 	}
 

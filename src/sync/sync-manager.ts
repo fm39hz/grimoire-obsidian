@@ -19,7 +19,7 @@ export class SyncManager {
 		this.api = api;
 		this.structure = new VaultStructure(app, syncFolder);
 		this.fileManager = new FileManager(app, this.structure, api);
-		this.pullSync = new PullSync(api, this.fileManager, this.structure);
+		this.pullSync = new PullSync(api, this.fileManager, this.structure, app);
 		this.state = { status: "idle" };
 	}
 
