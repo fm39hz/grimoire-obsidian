@@ -15,8 +15,7 @@ import type {
 	ChapterListResponse,
 	ChapterResponse,
 	SyncResult,
-	ImageSegment,
-	Segment,
+	AssetListingDto,
 } from "../types";
 import { App, TFile } from "obsidian";
 import { joinPath } from "../utils";
@@ -101,8 +100,8 @@ export class PullSync {
 				try {
 					// Fetch series content separately
 					const contentResponse = await this.api.series.getContent(series.id);
-					if (contentResponse?.content) {
-						series.markdown = contentResponse.content;
+					if (contentResponse?.data) {
+						series.markdown = contentResponse.data;
 					}
 
 					await this.syncSeriesFile(series);
@@ -217,15 +216,21 @@ export class PullSync {
 						
 						// Fetch chapter content in markdown format
 						const contentResponse = await this.api.chapters.getContent(chapterInfo.id);
-						if (contentResponse?.content) {
-							chapter.markdown = contentResponse.content;
+						if (contentResponse?.data) {
+							chapter.markdown = contentResponse.data;
 						}
 						
-						// Process images in the chapter
-						const processedChapter = await this.processChapterImages(chapter, volume.seriesTitle);
+						// Process assets from content response
+						if (contentResponse?.assets && contentResponse.assets.length > 0) {
+							chapter.markdown = await this.processContentAssets(
+								contentResponse.assets,
+								chapter.markdown ?? "",
+								volume.seriesTitle
+							);
+						}
 
 						await this.fileManager.writeChapterFile(
-							processedChapter,
+							chapter,
 							volume.seriesTitle,
 							volume.title,
 							volume.order
@@ -266,8 +271,8 @@ export class PullSync {
 
 			// Fetch series content in markdown format
 			const contentResponse = await this.api.series.getContent(seriesId);
-			if (contentResponse?.content) {
-				series.markdown = contentResponse.content;
+			if (contentResponse?.data) {
+				series.markdown = contentResponse.data;
 			}
 
 			if (!series.id || !series.title) {
@@ -368,15 +373,21 @@ export class PullSync {
 						
 						// Fetch chapter content in markdown format
 						const contentResponse = await this.api.chapters.getContent(chapterInfo.id);
-						if (contentResponse?.content) {
-							chapter.markdown = contentResponse.content;
+						if (contentResponse?.data) {
+							chapter.markdown = contentResponse.data;
 						}
 						
-						// Process images in the chapter
-						const processedChapter = await this.processChapterImages(chapter, volume.seriesTitle);
+						// Process assets from content response
+						if (contentResponse?.assets && contentResponse.assets.length > 0) {
+							chapter.markdown = await this.processContentAssets(
+								contentResponse.assets,
+								chapter.markdown ?? "",
+								volume.seriesTitle
+							);
+						}
 
 						await this.fileManager.writeChapterFile(
-							processedChapter,
+							chapter,
 							volume.seriesTitle,
 							volume.title,
 							volume.order
@@ -446,128 +457,42 @@ export class PullSync {
 	}
 
 	/**
-	 * Process image segments in a chapter: download images and update references
+	 * Process assets from content response: download images and update references in markdown
 	 */
-	private async processChapterImages(
-		chapter: ChapterResponse,
+	private async processContentAssets(
+		assets: AssetListingDto[],
+		markdown: string,
 		seriesTitle: string
-	): Promise<ChapterResponse> {
-		if (!chapter.content || chapter.content.length === 0) {
-			return chapter;
-		}
+	): Promise<string> {
+		let processedMarkdown = markdown;
 
-		// Process each segment to find image segments
-		const updatedContentPromises = chapter.content.map(async (segment) => {
-			// Check if this is an image segment
-			if (this.isImageSegment(segment)) {
-				const imageSegment = segment;
-				const src = imageSegment.src;
-				
-				if (src) {
-					// Extract asset ID from the src (assuming it's in the format of an asset ID)
-					const assetId = this.extractAssetIdFromSrc(src);
-					if (assetId) {
-						// Download the image and get the local path
-						return await this.downloadAndUpdateImageReference(
-							assetId,
-							seriesTitle,
-							imageSegment
-						);
-					}
+		for (const asset of assets) {
+			if (!asset.id || !asset.fileName) continue;
+
+			try {
+				const buffer = await this.api.files.download(asset.id);
+
+				const imagesFolderPath = this.structure.getSeriesImagesPath(seriesTitle);
+				const normalizedPath = joinPath(imagesFolderPath, asset.fileName);
+
+				const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
+				if (existing instanceof TFile) {
+					await this.app.vault.modifyBinary(existing, buffer);
+				} else {
+					await this.app.vault.createBinary(normalizedPath, buffer);
 				}
+
+				// Replace markdown image references like `![Image](assetId)` with local path
+				const refPattern = `](${asset.id})`;
+				while (processedMarkdown.includes(refPattern)) {
+					processedMarkdown = processedMarkdown.replace(refPattern, `](${normalizedPath})`);
+				}
+			} catch (error) {
+				console.error(`Failed to download asset ${asset.id} (${asset.fileName}):`, error);
 			}
-			// Return unchanged segment if not an image or no src
-			return segment;
-		});
-
-		// Wait for all promises to resolve
-		const updatedContent = await Promise.all(updatedContentPromises);
-
-		// Return chapter with updated content
-		return {
-			...chapter,
-			content: updatedContent
-		};
-	}
-
-	/**
-	 * Check if a segment is an image segment
-	 */
-	private isImageSegment(segment: Segment): segment is ImageSegment {
-		return 'src' in segment && 'width' in segment && 'height' in segment;
-	}
-
-	/**
-	 * Extract asset ID from image src (implementation depends on how assets are referenced)
-	 */
-	private extractAssetIdFromSrc(src: string): string | null {
-		// If src is already an asset ID (UUID), return it directly
-		if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(src)) {
-			return src;
 		}
-		
-		// If src is a URL like /api/v1/files/{assetId}, extract the ID
-		const match = src.match(/\/api\/v1\/files\/(.+)$/);
-		if (match && match[1]) {
-			return match[1];
-		}
-		
-		// If src is just a filename, we might need to look it up differently
-		// For now, return null to indicate we couldn't extract an ID
-		return null;
-	}
 
-	/**
-	 * Download an image and update its reference to point to local path
-	 */
-	private async downloadAndUpdateImageReference(
-		assetId: string,
-		seriesTitle: string,
-		imageSegment: ImageSegment
-	): Promise<ImageSegment> {
-		try {
-			// Download the image
-			const buffer = await this.api.files.download(assetId);
-			
-			// Generate a filename (use asset ID or extract from original src if possible)
-			const filename = this.extractFilenameFromSrc(imageSegment.src) ?? `${assetId}.bin`;
-			
-			// Save to series images folder
-			const imagesFolderPath = this.structure.getSeriesImagesPath(seriesTitle);
-			const normalizedPath = joinPath(imagesFolderPath, filename);
-			
-			const existing = this.app.vault.getAbstractFileByPath(normalizedPath);
-			if (existing instanceof TFile) {
-				await this.app.vault.modifyBinary(existing, buffer);
-			} else {
-				await this.app.vault.createBinary(normalizedPath, buffer);
-			}
-			
-			// Return updated image segment with local path
-			return {
-				...imageSegment,
-				src: normalizedPath
-			};
-		} catch (error) {
-			console.error(`Failed to download image ${assetId}:`, error);
-			// Return original segment if download fails
-			return imageSegment;
-		}
-	}
-
-	/**
-	 * Extract filename from src URL or path
-	 */
-	private extractFilenameFromSrc(src: string | null): string | null {
-		if (!src) return null;
-		
-		// Handle URLs like /api/v1/files/asset-id (no filename in URL)
-		// Handle paths like /path/to/image.jpg
-		const normalizedSrc = src.replace(/\\/g, "/");
-		const parts = normalizedSrc.split("/");
-		const filename = parts[parts.length - 1];
-		
-		return filename && filename !== "" ? filename : null;
+		return processedMarkdown;
 	}
 
 	/**

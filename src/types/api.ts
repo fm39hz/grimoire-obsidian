@@ -43,15 +43,25 @@ export interface TextSegment extends Segment {
 	runs: TextRun[] | null;
 }
 
-export interface ImageSegment extends Segment {
-	src: string | null;
-	width: number | null;
-	height: number | null;
-}
-
 export interface FootnoteSegment {
 	id: string | null;
 	segments: TextSegment[] | null;
+}
+
+// ============================================================================
+// Content Response (used by /content endpoints)
+// ============================================================================
+
+export interface AssetListingDto {
+	id: string | null;
+	refType: string | null;
+	fileName: string | null;
+}
+
+export interface ContentResponseDto {
+	data: string | null;
+	type: string | null;
+	assets: AssetListingDto[] | null;
 }
 
 // ============================================================================
@@ -71,6 +81,8 @@ export interface SeriesResponse {
 	title: string | null;
 	metadata?: SeriesMetadata | null;
 	markdown?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
 }
 
 export interface CreateSeriesRequest {
@@ -99,6 +111,8 @@ export interface VolumeResponse {
 	order: number;
 	title: string | null;
 	metadata?: VolumeMetadata | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
 }
 
 export interface CreateVolumeRequest {
@@ -125,16 +139,16 @@ export interface ChapterListResponse {
 	title: string | null;
 }
 
-export type ContentSegment = TextSegment | ImageSegment;
-
 export interface ChapterResponse {
 	id: string | null;
 	volumeId: string | null;
 	order: number;
 	title: string | null;
-	content: ContentSegment[] | null;
+	content: Segment[] | null;
 	footnotes: FootnoteSegment[] | null;
 	markdown?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
 }
 
 export interface CreateChapterRequest {

@@ -6,6 +6,7 @@ import type { ApiClient } from "./client";
 import type {
 	ChapterResponse,
 	ChapterListResponse,
+	ContentResponseDto,
 	CreateChapterRequest,
 	UpdateChapterRequest,
 	SplitChapterRequest,
@@ -44,8 +45,8 @@ export class ChaptersApi {
 	/**
 	 * Get chapter content in the specified format
 	 */
-	async getContent(id: string, format: string = "markdown"): Promise<{ content: string | null; contentType: string | null }> {
-		return this.client.get<{ content: string | null; contentType: string | null }>(`/api/v1/chapters/${id}/content`, {
+	async getContent(id: string, format: string = "markdown"): Promise<ContentResponseDto> {
+		return this.client.get<ContentResponseDto>(`/api/v1/chapters/${id}/content`, {
 			format
 		});
 	}
