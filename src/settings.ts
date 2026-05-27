@@ -12,12 +12,15 @@ export interface GrimoireSyncSettings {
 	syncFolder: string;
 	/** Automatically create folder structure during sync */
 	autoCreateFolders: boolean;
+	/** Subfolder name within each series folder for storing pulled images */
+	imagesFolder: string;
 }
 
 export const DEFAULT_SETTINGS: GrimoireSyncSettings = {
 	apiBaseUrl: "",
 	syncFolder: "Books",
 	autoCreateFolders: true,
+	imagesFolder: "images",
 };
 
 export class GrimoireSyncSettingTab extends PluginSettingTab {
@@ -71,6 +74,20 @@ export class GrimoireSyncSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.autoCreateFolders)
 					.onChange(async (value) => {
 						this.plugin.settings.autoCreateFolders = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// Images folder name
+		new Setting(containerEl)
+			.setName("Images folder")
+			.setDesc("Subfolder name inside each series folder for storing pulled images. Set to match Obsidian's attachment subfolder setting for consistent paths.")
+			.addText((text) =>
+				text
+					.setPlaceholder("images")
+					.setValue(this.plugin.settings.imagesFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.imagesFolder = value.trim() || "images";
 						await this.plugin.saveSettings();
 					})
 			);

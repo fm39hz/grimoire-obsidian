@@ -94,44 +94,23 @@ export class SeriesApi {
 	}
 
 	/**
-	 * Get volumes for a series
+	 * Get volumes for a series.
+	 * Backend may return either a direct array or a PagedResult.
 	 */
-	async getVolumes(
-		seriesId: string,
-		options?: {
-			pageIndex?: number;
-			pageSize?: number;
-			sortBy?: string;
-			sortDescending?: boolean;
+	async getVolumes(seriesId: string): Promise<VolumeResponse[]> {
+		const result = await this.client.get<VolumeResponse[] | PagedResult<VolumeResponse>>(
+			`/api/v1/series/${seriesId}/volumes`
+		);
+		if (Array.isArray(result)) {
+			return result;
 		}
-	): Promise<PagedResult<VolumeResponse>> {
-		return this.client.get<PagedResult<VolumeResponse>>(`/api/v1/series/${seriesId}/volumes`, {
-			pageIndex: options?.pageIndex,
-			pageSize: options?.pageSize,
-			sortBy: options?.sortBy,
-			sortDescending: options?.sortDescending,
-		});
+		return result.items ?? [];
 	}
 
 	/**
-	 * Get all volumes for a series (handles pagination)
+	 * Get all volumes for a series
 	 */
 	async getAllVolumes(seriesId: string): Promise<VolumeResponse[]> {
-		const allVolumes: VolumeResponse[] = [];
-		let pageIndex = 1;
-		const pageSize = 50;
-
-		while (true) {
-			const result = await this.getVolumes(seriesId, { pageIndex, pageSize });
-			if (result.items) {
-				allVolumes.push(...result.items);
-			}
-			if (!result.hasNextPage) {
-				break;
-			}
-			pageIndex++;
-		}
-
-		return allVolumes;
+		return this.getVolumes(seriesId);
 	}
 }

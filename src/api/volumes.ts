@@ -60,44 +60,23 @@ export class VolumesApi {
 	}
 
 	/**
-	 * Get chapters for a volume
+	 * Get chapters for a volume.
+	 * Backend may return either a direct array or a PagedResult.
 	 */
-	async getChapters(
-		volumeId: string,
-		options?: {
-			pageIndex?: number;
-			pageSize?: number;
-			sortBy?: string;
-			sortDescending?: boolean;
+	async getChapters(volumeId: string): Promise<ChapterListResponse[]> {
+		const result = await this.client.get<ChapterListResponse[] | PagedResult<ChapterListResponse>>(
+			`/api/v1/volumes/${volumeId}/chapters`
+		);
+		if (Array.isArray(result)) {
+			return result;
 		}
-	): Promise<PagedResult<ChapterListResponse>> {
-		return this.client.get<PagedResult<ChapterListResponse>>(`/api/v1/volumes/${volumeId}/chapters`, {
-			pageIndex: options?.pageIndex,
-			pageSize: options?.pageSize,
-			sortBy: options?.sortBy,
-			sortDescending: options?.sortDescending,
-		});
+		return result.items ?? [];
 	}
 
 	/**
 	 * Get all chapters for a volume
 	 */
 	async getAllChapters(volumeId: string): Promise<ChapterListResponse[]> {
-		const allChapters: ChapterListResponse[] = [];
-		let pageIndex = 1;
-		const pageSize = 50;
-
-		while (true) {
-			const result = await this.getChapters(volumeId, { pageIndex, pageSize });
-			if (result.items) {
-				allChapters.push(...result.items);
-			}
-			if (!result.hasNextPage) {
-				break;
-			}
-			pageIndex++;
-		}
-
-		return allChapters;
+		return this.getChapters(volumeId);
 	}
 }

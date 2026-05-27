@@ -103,6 +103,13 @@ export class PullSync {
 					if (contentResponse?.data) {
 						series.markdown = contentResponse.data;
 					}
+					if (contentResponse?.assets && contentResponse.assets.length > 0) {
+						series.markdown = await this.processContentAssets(
+							contentResponse.assets,
+							series.markdown ?? "",
+							series.title
+						);
+					}
 
 					await this.syncSeriesFile(series);
 					syncedSeries.push({ id: series.id, title: series.title });
@@ -269,14 +276,21 @@ export class PullSync {
 			// === PHASE 1: Sync series ===
 			const series = await this.api.series.get(seriesId);
 
+			if (!series.id || !series.title) {
+				throw new Error("Invalid series data");
+			}
+
 			// Fetch series content in markdown format
 			const contentResponse = await this.api.series.getContent(seriesId);
 			if (contentResponse?.data) {
 				series.markdown = contentResponse.data;
 			}
-
-			if (!series.id || !series.title) {
-				throw new Error("Invalid series data");
+			if (contentResponse?.assets && contentResponse.assets.length > 0) {
+				series.markdown = await this.processContentAssets(
+					contentResponse.assets,
+					series.markdown ?? "",
+					series.title
+				);
 			}
 
 			onProgress?.({
@@ -473,6 +487,7 @@ export class PullSync {
 				const buffer = await this.api.files.download(asset.id);
 
 				const imagesFolderPath = this.structure.getSeriesImagesPath(seriesTitle);
+				await this.structure.ensureFolder(imagesFolderPath);
 				const normalizedPath = joinPath(imagesFolderPath, asset.fileName);
 
 				const existing = this.app.vault.getAbstractFileByPath(normalizedPath);

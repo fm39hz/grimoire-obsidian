@@ -38,7 +38,8 @@ export interface VaultChapter {
 export class VaultStructure {
 	constructor(
 		private app: App,
-		private syncFolder: string
+		private syncFolder: string,
+		private imagesFolder: string = "images"
 	) {}
 
 	/**
@@ -46,6 +47,13 @@ export class VaultStructure {
 	 */
 	setSyncFolder(syncFolder: string): void {
 		this.syncFolder = syncFolder;
+	}
+
+	/**
+	 * Update the images folder name
+	 */
+	setImagesFolder(imagesFolder: string): void {
+		this.imagesFolder = imagesFolder;
 	}
 
 	/**
@@ -135,7 +143,7 @@ export class VaultStructure {
 	 * Get the path for a series's images folder.
 	 */
 	getSeriesImagesPath(seriesTitle: string): string {
-		return joinPath(this.getSeriesFolderPath(seriesTitle), "images");
+		return joinPath(this.getSeriesFolderPath(seriesTitle), this.imagesFolder);
 	}
 
 	/**

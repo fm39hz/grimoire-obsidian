@@ -204,6 +204,7 @@ export enum ExportFormat {
 	Pdf = 1,
 	Mobi = 2,
 	Html = 3,
+	Docx = 4,
 }
 
 export enum BookSection {
@@ -233,4 +234,17 @@ export interface BinderyRequest {
 	mode?: string | null;
 	targetVolumeIds?: string[] | null;
 	structure?: ExportStructure | null;
+}
+
+// ============================================================================
+// Job Types
+// ============================================================================
+
+export interface JobResponse {
+	id: string;
+	status: string;
+	progress?: number | null;
+	message?: string | null;
+	createdAt?: string | null;
+	updatedAt?: string | null;
 }

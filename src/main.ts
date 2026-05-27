@@ -44,7 +44,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 	private initializeApi() {
 		if (this.settings.apiBaseUrl) {
 			this.api = new GrimoireApi({ baseUrl: this.settings.apiBaseUrl });
-			this.syncManager = new SyncManager(this.app, this.api, this.settings.syncFolder);
+			this.syncManager = new SyncManager(this.app, this.api, this.settings.syncFolder, this.settings.imagesFolder);
 		} else {
 			this.api = null;
 			this.syncManager = null;
@@ -85,7 +85,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 		// Reinitialize API with new settings
 		this.initializeApi();
 		if (this.syncManager) {
-			this.syncManager.configure(this.settings.syncFolder);
+			this.syncManager.configure(this.settings.syncFolder, this.settings.imagesFolder);
 		}
 	}
 

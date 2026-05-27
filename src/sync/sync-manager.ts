@@ -15,9 +15,9 @@ export class SyncManager {
 	private pullSync: PullSync;
 	private state: SyncState;
 
-	constructor(app: App, api: GrimoireApi, syncFolder: string) {
+	constructor(app: App, api: GrimoireApi, syncFolder: string, imagesFolder: string = "images") {
 		this.api = api;
-		this.structure = new VaultStructure(app, syncFolder);
+		this.structure = new VaultStructure(app, syncFolder, imagesFolder);
 		this.fileManager = new FileManager(app, this.structure, api);
 		this.pullSync = new PullSync(api, this.fileManager, this.structure, app);
 		this.state = { status: "idle" };
@@ -26,8 +26,11 @@ export class SyncManager {
 	/**
 	 * Update configuration
 	 */
-	configure(syncFolder: string): void {
+	configure(syncFolder: string, imagesFolder?: string): void {
 		this.structure.setSyncFolder(syncFolder);
+		if (imagesFolder !== undefined) {
+			this.structure.setImagesFolder(imagesFolder);
+		}
 	}
 
 	/**
