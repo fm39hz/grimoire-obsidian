@@ -498,9 +498,11 @@ export class PullSync {
 				}
 
 				// Replace markdown image references like `![Image](assetId)` with local path
+				// URL-encode path segments to handle spaces/special chars in folder/file names
+				const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
 				const refPattern = `](${asset.id})`;
 				while (processedMarkdown.includes(refPattern)) {
-					processedMarkdown = processedMarkdown.replace(refPattern, `](${normalizedPath})`);
+					processedMarkdown = processedMarkdown.replace(refPattern, `](${encodedPath})`);
 				}
 			} catch (error) {
 				console.error(`Failed to download asset ${asset.id} (${asset.fileName}):`, error);
