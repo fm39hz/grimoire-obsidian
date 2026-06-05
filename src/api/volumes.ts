@@ -63,20 +63,45 @@ export class VolumesApi {
 	 * Get chapters for a volume.
 	 * Backend may return either a direct array or a PagedResult.
 	 */
-	async getChapters(volumeId: string): Promise<ChapterListResponse[]> {
-		const result = await this.client.get<ChapterListResponse[] | PagedResult<ChapterListResponse>>(
-			`/api/v1/volumes/${volumeId}/chapters`
+	async getChapters(
+		volumeId: string,
+		options?: { pageIndex?: number; pageSize?: number }
+	): Promise<ChapterListResponse[] | PagedResult<ChapterListResponse>> {
+		return this.client.get<ChapterListResponse[] | PagedResult<ChapterListResponse>>(
+			`/api/v1/volumes/${volumeId}/chapters`,
+			{
+				pageIndex: options?.pageIndex,
+				pageSize: options?.pageSize,
+			}
 		);
-		if (Array.isArray(result)) {
-			return result;
-		}
-		return result.items ?? [];
 	}
 
 	/**
-	 * Get all chapters for a volume
+	 * Get all chapters for a volume (handles pagination if response is PagedResult)
 	 */
 	async getAllChapters(volumeId: string): Promise<ChapterListResponse[]> {
-		return this.getChapters(volumeId);
+		const pageSize = 50;
+		const first = await this.getChapters(volumeId, { pageIndex: 1, pageSize });
+
+		if (Array.isArray(first)) {
+			return first;
+		}
+
+		const all: ChapterListResponse[] = [...(first.items ?? [])];
+		let pageIndex = 2;
+		let current: PagedResult<ChapterListResponse> = first;
+
+		while (current.hasNextPage) {
+			current = await this.client.get<PagedResult<ChapterListResponse>>(
+				`/api/v1/volumes/${volumeId}/chapters`,
+				{ pageIndex, pageSize }
+			);
+			if (current.items) {
+				all.push(...current.items);
+			}
+			pageIndex++;
+		}
+
+		return all;
 	}
 }
