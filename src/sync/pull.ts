@@ -15,10 +15,12 @@ import type {
 	ChapterResponse,
 	SyncResult,
 	AssetListingDto,
+	ChapterListResponse,
 } from "../types";
 import { App, TFile, TFolder, normalizePath } from "obsidian";
 import { joinPath, extractOrderFromName } from "../utils";
 import { parseFrontmatter } from "../vault/frontmatter";
+import type { GrimoireSyncSettings } from "../settings";
 
 export interface PullProgress {
 	phase: "series" | "volumes" | "chapters";
@@ -39,7 +41,8 @@ export class PullSync {
 		private api: GrimoireApi,
 		private fileManager: FileManager,
 		private structure: VaultStructure,
-		private app: App
+		private app: App,
+		private settings?: GrimoireSyncSettings
 	) {}
 
 	/**
@@ -232,6 +235,8 @@ export class PullSync {
 				let activeVolumeTitle = remote.title;
 				let activeVolumeOrder = remote.order;
 
+				const remoteChapters = await this.api.volumes.getAllChapters(remote.id);
+
 				if (local) {
 					const file = this.app.vault.getAbstractFileByPath(local.metadataPath);
 					if (file instanceof TFile) {
@@ -244,28 +249,28 @@ export class PullSync {
 							const localTime = file.stat.mtime;
 							const remoteTime = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
 							if (localTime > remoteTime) {
-								await this.pushVolume(file, remote, seriesTitle);
+								await this.pushVolume(file, remote, seriesTitle, remoteChapters);
 								result.pushed!.volumes++;
 							} else {
-								await this.syncVolumeFile(remote, seriesTitle);
+								await this.syncVolumeFile(remote, seriesTitle, remoteChapters);
 								result.pulled!.volumes++;
 							}
 						} else if (localEdited) {
-							await this.pushVolume(file, remote, seriesTitle);
+							await this.pushVolume(file, remote, seriesTitle, remoteChapters);
 							result.pushed!.volumes++;
 						} else if (remoteNewer) {
-							await this.syncVolumeFile(remote, seriesTitle);
+							await this.syncVolumeFile(remote, seriesTitle, remoteChapters);
 							result.pulled!.volumes++;
 						}
 					}
 				} else {
-					await this.syncVolumeFile(remote, seriesTitle);
+					await this.syncVolumeFile(remote, seriesTitle, remoteChapters);
 					result.pulled!.volumes++;
 				}
 
 				// Sync chapters for this volume
 				const volumeFolderPath = this.structure.getVolumeFolderPath(seriesTitle, activeVolumeTitle, activeVolumeOrder);
-				await this.syncChapters(remote, series, seriesTitle, activeVolumeTitle, activeVolumeOrder, volumeFolderPath, result, onProgress);
+				await this.syncChapters(remote, series, seriesTitle, activeVolumeTitle, activeVolumeOrder, volumeFolderPath, result, onProgress, remoteChapters);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "Unknown error";
 				result.errors.push(`Failed to sync volume "${remote.title}": ${message}`);
@@ -284,10 +289,11 @@ export class PullSync {
 		volumeOrder: number,
 		volumeFolderPath: string,
 		result: SyncResult,
-		onProgress?: ProgressCallback
+		onProgress?: ProgressCallback,
+		prefetchedChapters?: ChapterListResponse[]
 	): Promise<void> {
 		const localChapters = await this.structure.findChaptersInVolume(volumeFolderPath);
-		const remoteChapters = await this.api.volumes.getAllChapters(volume.id!);
+		const remoteChapters = prefetchedChapters || await this.api.volumes.getAllChapters(volume.id!);
 
 		const localChapterMap = new Map<string, typeof localChapters[0]>();
 		const localNewChapters: typeof localChapters = [];
@@ -369,7 +375,8 @@ export class PullSync {
 				series.title!
 			);
 		}
-		await this.syncSeriesFile(series);
+		const volumes = await this.api.series.getAllVolumes(series.id!);
+		await this.syncSeriesFile(series, volumes);
 	}
 
 	/**
@@ -377,7 +384,9 @@ export class PullSync {
 	 */
 	private async pullChapter(id: string, seriesTitle: string, volumeTitle: string, volumeOrder: number): Promise<void> {
 		const chapter = await this.api.chapters.get(id);
-		const contentResponse = await this.api.chapters.getContent(id);
+		const footnoteStyle = this.settings?.footnoteStyle;
+		const enableDropcap = this.settings?.enableDropcap;
+		const contentResponse = await this.api.chapters.getContent(id, "markdown", footnoteStyle, enableDropcap);
 		if (contentResponse?.data) {
 			chapter.markdown = contentResponse.data;
 		}
@@ -413,13 +422,19 @@ export class PullSync {
 			}
 		});
 
-		await this.fileManager.writeSeriesFile(updatedRemote);
+		const volumes = await this.api.series.getAllVolumes(remoteSeries.id!);
+		await this.fileManager.writeSeriesFile(updatedRemote, volumes);
 	}
 
 	/**
 	 * Push local volume changes to server
 	 */
-	private async pushVolume(file: TFile, remoteVolume: VolumeResponse, seriesTitle: string): Promise<void> {
+	private async pushVolume(
+		file: TFile,
+		remoteVolume: VolumeResponse,
+		seriesTitle: string,
+		chapters?: ChapterListResponse[]
+	): Promise<void> {
 		const content = await this.app.vault.read(file);
 		const { frontmatter } = parseFrontmatter(content);
 
@@ -438,7 +453,8 @@ export class PullSync {
 			}
 		});
 
-		await this.fileManager.writeVolumeFile(updatedRemote, seriesTitle);
+		const finalChapters = chapters || await this.api.volumes.getAllChapters(remoteVolume.id!);
+		await this.fileManager.writeVolumeFile(updatedRemote, seriesTitle, finalChapters);
 
 		const newMetadataPath = this.structure.getVolumeMetadataPath(seriesTitle, title, order);
 		if (normalizePath(file.path) !== normalizePath(newMetadataPath)) {
@@ -519,12 +535,12 @@ export class PullSync {
 	/**
 	 * Sync a series file to the vault (metadata + cover image)
 	 */
-	private async syncSeriesFile(series: SeriesResponse): Promise<void> {
+	private async syncSeriesFile(series: SeriesResponse, volumes?: VolumeResponse[]): Promise<void> {
 		if (!series.id || !series.title) {
 			throw new Error("Invalid series data");
 		}
 
-		await this.fileManager.writeSeriesFile(series);
+		await this.fileManager.writeSeriesFile(series, volumes);
 
 		const coverImageId = series.metadata?.coverImage;
 		if (coverImageId) {
@@ -537,12 +553,16 @@ export class PullSync {
 	/**
 	 * Sync a volume file to the vault (metadata + cover image)
 	 */
-	private async syncVolumeFile(volume: VolumeResponse, seriesTitle: string): Promise<void> {
+	private async syncVolumeFile(
+		volume: VolumeResponse,
+		seriesTitle: string,
+		chapters?: ChapterListResponse[]
+	): Promise<void> {
 		if (!volume.id || !volume.title) {
 			throw new Error("Invalid volume data");
 		}
 
-		await this.fileManager.writeVolumeFile(volume, seriesTitle);
+		await this.fileManager.writeVolumeFile(volume, seriesTitle, chapters);
 
 		const volumeCoverId = volume.metadata?.coverImage;
 		if (volumeCoverId) {

@@ -58,7 +58,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 	private initializeApi() {
 		if (this.settings.apiBaseUrl) {
 			this.api = new GrimoireApi({ baseUrl: this.settings.apiBaseUrl });
-			this.syncManager = new SyncManager(this.app, this.api, this.settings.syncFolder, this.settings.imagesFolder);
+			this.syncManager = new SyncManager(this.app, this.api, this.settings);
 		} else {
 			this.api = null;
 			this.syncManager = null;
@@ -106,7 +106,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 		// Reinitialize API with new settings
 		this.initializeApi();
 		if (this.syncManager) {
-			this.syncManager.configure(this.settings.syncFolder, this.settings.imagesFolder);
+			this.syncManager.configure(this.settings);
 		}
 		this.startAutoSyncTimer();
 	}
@@ -348,7 +348,12 @@ export default class GrimoireSyncPlugin extends Plugin {
 				const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
 				const seriesTitle = seriesFolder.name;
 
-				const contentResponse = await this.api.chapters.getContent(mergedChapter.id!);
+				const contentResponse = await this.api.chapters.getContent(
+					mergedChapter.id!,
+					"markdown",
+					this.settings.footnoteStyle,
+					this.settings.enableDropcap
+				);
 				if (contentResponse?.data) {
 					mergedChapter.markdown = contentResponse.data;
 				}
@@ -406,7 +411,12 @@ export default class GrimoireSyncPlugin extends Plugin {
 					const fileManager = (this.syncManager as any).fileManager;
 
 					for (const ch of resultChapters) {
-						const contentResponse = await this.api!.chapters.getContent(ch.id!);
+						const contentResponse = await this.api!.chapters.getContent(
+							ch.id!,
+							"markdown",
+							this.settings.footnoteStyle,
+							this.settings.enableDropcap
+						);
 						if (contentResponse?.data) {
 							ch.markdown = contentResponse.data;
 						}

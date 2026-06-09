@@ -8,8 +8,10 @@ import type {
 	VolumeFrontmatter,
 	ChapterFrontmatter,
 	GrimoireEntityType,
+	VolumeResponse,
+	ChapterListResponse,
 } from "../types";
-import { FRONTMATTER_KEYS } from "../utils";
+import { FRONTMATTER_KEYS, createOrderedName } from "../utils";
 
 /**
  * Parse YAML frontmatter from markdown content
@@ -259,6 +261,20 @@ export function parseChapterFrontmatter(content: string): ChapterFrontmatter | n
 	};
 }
 
+function formatLink(
+	path: string,
+	display: string,
+	style: "WikiLinks" | "MarkdownLinks"
+): string {
+	if (style === "WikiLinks") {
+		const cleanPath = path.endsWith(".md") ? path.slice(0, -3) : path;
+		return `[[${cleanPath}|${display}]]`;
+	} else {
+		const cleanPath = path.endsWith(".md") ? path : `${path}.md`;
+		return `[${display}](${cleanPath})`;
+	}
+}
+
 /**
  * Create SeriesFrontmatter object
  */
@@ -270,18 +286,46 @@ export function createSeriesFrontmatter(
 		artists?: string[];
 		tags?: string[];
 		coverImage?: string;
+		volumes?: VolumeResponse[];
+		linkStyle?: "WikiLinks" | "MarkdownLinks";
+		includeMetadataFiles?: boolean;
+		includeFrontmatter?: boolean;
 	}
 ): Record<string, unknown> {
-	return {
-		[FRONTMATTER_KEYS.ID]: id,
-		[FRONTMATTER_KEYS.TYPE]: "series",
-		[FRONTMATTER_KEYS.TITLE]: title,
-		[FRONTMATTER_KEYS.LAST_SYNCED]: new Date().toISOString(),
-		...(options?.authors && { [FRONTMATTER_KEYS.AUTHORS]: options.authors }),
-		...(options?.artists && { [FRONTMATTER_KEYS.ARTISTS]: options.artists }),
-		...(options?.tags && { [FRONTMATTER_KEYS.TAGS]: options.tags }),
-		...(options?.coverImage && { [FRONTMATTER_KEYS.COVER_IMAGE]: options.coverImage }),
-	};
+	const includeFM = options?.includeFrontmatter ?? true;
+	const linkStyle = options?.linkStyle ?? "WikiLinks";
+	const includeMeta = options?.includeMetadataFiles ?? true;
+
+	const fm: Record<string, unknown> = {};
+
+	if (includeFM) {
+		fm[FRONTMATTER_KEYS.ID] = id;
+		fm[FRONTMATTER_KEYS.TYPE] = "series";
+	}
+
+	fm[FRONTMATTER_KEYS.TITLE] = title;
+
+	if (includeFM) {
+		fm[FRONTMATTER_KEYS.LAST_SYNCED] = new Date().toISOString();
+	}
+
+	if (options?.authors) fm[FRONTMATTER_KEYS.AUTHORS] = options.authors;
+	if (options?.artists) fm[FRONTMATTER_KEYS.ARTISTS] = options.artists;
+	if (options?.tags) fm[FRONTMATTER_KEYS.TAGS] = options.tags;
+	if (options?.coverImage) fm[FRONTMATTER_KEYS.COVER_IMAGE] = options.coverImage;
+
+	if (includeFM && includeMeta && options?.volumes && options.volumes.length > 0) {
+		const links = options.volumes
+			.filter(vol => vol.title)
+			.map(vol => {
+				const folderName = createOrderedName(vol.title!, vol.order);
+				const path = `${folderName}/_volume.md`;
+				return formatLink(path, vol.title!, linkStyle);
+			});
+		fm["volumes"] = links;
+	}
+
+	return fm;
 }
 
 /**
@@ -296,19 +340,52 @@ export function createVolumeFrontmatter(
 		publicationDate?: string;
 		isbn?: string;
 		coverImage?: string;
+		seriesTitle?: string;
+		chapters?: ChapterListResponse[];
+		linkStyle?: "WikiLinks" | "MarkdownLinks";
+		includeMetadataFiles?: boolean;
+		includeFrontmatter?: boolean;
 	}
 ): Record<string, unknown> {
-	return {
-		[FRONTMATTER_KEYS.ID]: id,
-		[FRONTMATTER_KEYS.TYPE]: "volume",
-		[FRONTMATTER_KEYS.SERIES_ID]: seriesId,
-		[FRONTMATTER_KEYS.TITLE]: title,
-		[FRONTMATTER_KEYS.ORDER]: order,
-		[FRONTMATTER_KEYS.LAST_SYNCED]: new Date().toISOString(),
-		...(options?.publicationDate && { [FRONTMATTER_KEYS.PUBLICATION_DATE]: options.publicationDate }),
-		...(options?.isbn && { [FRONTMATTER_KEYS.ISBN]: options.isbn }),
-		...(options?.coverImage && { [FRONTMATTER_KEYS.COVER_IMAGE]: options.coverImage }),
-	};
+	const includeFM = options?.includeFrontmatter ?? true;
+	const linkStyle = options?.linkStyle ?? "WikiLinks";
+	const includeMeta = options?.includeMetadataFiles ?? true;
+
+	const fm: Record<string, unknown> = {};
+
+	if (includeFM) {
+		fm[FRONTMATTER_KEYS.ID] = id;
+		fm[FRONTMATTER_KEYS.TYPE] = "volume";
+		fm[FRONTMATTER_KEYS.SERIES_ID] = seriesId;
+	}
+
+	fm[FRONTMATTER_KEYS.TITLE] = title;
+	fm[FRONTMATTER_KEYS.ORDER] = order;
+
+	if (includeFM) {
+		fm[FRONTMATTER_KEYS.LAST_SYNCED] = new Date().toISOString();
+	}
+
+	if (options?.publicationDate) fm[FRONTMATTER_KEYS.PUBLICATION_DATE] = options.publicationDate;
+	if (options?.isbn) fm[FRONTMATTER_KEYS.ISBN] = options.isbn;
+	if (options?.coverImage) fm[FRONTMATTER_KEYS.COVER_IMAGE] = options.coverImage;
+
+	if (includeFM && includeMeta && options?.seriesTitle) {
+		const path = "../_series.md";
+		fm["series"] = formatLink(path, options.seriesTitle, linkStyle);
+	}
+
+	if (includeFM && options?.chapters && options.chapters.length > 0) {
+		const links = options.chapters
+			.filter(ch => ch.title)
+			.map(ch => {
+				const fileName = createOrderedName(ch.title!, ch.order) + ".md";
+				return formatLink(fileName, ch.title!, linkStyle);
+			});
+		fm["chapters"] = links;
+	}
+
+	return fm;
 }
 
 /**
@@ -318,14 +395,37 @@ export function createChapterFrontmatter(
 	id: string,
 	volumeId: string,
 	title: string,
-	order: number
+	order: number,
+	options?: {
+		volumeTitle?: string;
+		linkStyle?: "WikiLinks" | "MarkdownLinks";
+		includeMetadataFiles?: boolean;
+		includeFrontmatter?: boolean;
+	}
 ): Record<string, unknown> {
-	return {
-		[FRONTMATTER_KEYS.ID]: id,
-		[FRONTMATTER_KEYS.TYPE]: "chapter",
-		[FRONTMATTER_KEYS.VOLUME_ID]: volumeId,
-		[FRONTMATTER_KEYS.TITLE]: title,
-		[FRONTMATTER_KEYS.ORDER]: order,
-		[FRONTMATTER_KEYS.LAST_SYNCED]: new Date().toISOString(),
-	};
+	const includeFM = options?.includeFrontmatter ?? true;
+	const linkStyle = options?.linkStyle ?? "WikiLinks";
+	const includeMeta = options?.includeMetadataFiles ?? true;
+
+	const fm: Record<string, unknown> = {};
+
+	if (includeFM) {
+		fm[FRONTMATTER_KEYS.ID] = id;
+		fm[FRONTMATTER_KEYS.TYPE] = "chapter";
+		fm[FRONTMATTER_KEYS.VOLUME_ID] = volumeId;
+	}
+
+	fm[FRONTMATTER_KEYS.TITLE] = title;
+	fm[FRONTMATTER_KEYS.ORDER] = order;
+
+	if (includeFM) {
+		fm[FRONTMATTER_KEYS.LAST_SYNCED] = new Date().toISOString();
+	}
+
+	if (includeFM && includeMeta && options?.volumeTitle) {
+		const path = "_volume.md";
+		fm["volume"] = formatLink(path, options.volumeTitle, linkStyle);
+	}
+
+	return fm;
 }

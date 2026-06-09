@@ -46,9 +46,11 @@ export class ChaptersApi {
 	/**
 	 * Get chapter content in the specified format
 	 */
-	async getContent(id: string, format: string = "markdown"): Promise<ContentResponseDto> {
+	async getContent(id: string, format: string = "markdown", footnoteStyle?: string, enableDropcap?: boolean): Promise<ContentResponseDto> {
 		return this.client.get<ContentResponseDto>(`/api/v1/chapters/${id}/content`, {
-			format
+			format,
+			footnoteStyle,
+			enableDropcap
 		});
 	}
 

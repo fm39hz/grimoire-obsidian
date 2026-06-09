@@ -17,25 +17,32 @@ import type {
 	SeriesResponse,
 	VolumeResponse,
 	ChapterResponse,
+	ChapterListResponse,
 } from "../types";
 import type { GrimoireApi } from "../api";
+import type { GrimoireSyncSettings } from "../settings";
 
 export class FileManager {
 	constructor(
 		private app: App,
 		private structure: VaultStructure,
-		private api?: GrimoireApi
+		private api?: GrimoireApi,
+		private settings?: GrimoireSyncSettings
 	) {}
 
 	/**
 	 * Create or update the series metadata file
 	 */
-	async writeSeriesFile(series: SeriesResponse): Promise<string> {
+	async writeSeriesFile(series: SeriesResponse, volumes?: VolumeResponse[]): Promise<string> {
 		if (!series.id || !series.title) {
 			throw new Error("Series must have id and title");
 		}
 
 		await this.structure.createSeriesFolder(series.title);
+		if (this.settings?.includeMetadataFiles === false) {
+			return "";
+		}
+
 		const filePath = this.structure.getSeriesMetadataPath(series.title);
 
 		const frontmatter = createSeriesFrontmatter(series.id, series.title, {
@@ -43,6 +50,10 @@ export class FileManager {
 			artists: series.metadata?.artists || undefined,
 			tags: series.metadata?.tags || undefined,
 			coverImage: series.metadata?.coverImage || undefined,
+			volumes: volumes,
+			linkStyle: this.settings?.linkStyle,
+			includeMetadataFiles: this.settings?.includeMetadataFiles,
+			includeFrontmatter: this.settings?.includeFrontmatter,
 		});
 
 		const content = createMarkdownWithFrontmatter(frontmatter, series.markdown ?? "");
@@ -54,18 +65,27 @@ export class FileManager {
 	/**
 	 * Create or update the volume metadata file
 	 */
-	async writeVolumeFile(volume: VolumeResponse, seriesTitle: string): Promise<string> {
+	async writeVolumeFile(volume: VolumeResponse, seriesTitle: string, chapters?: ChapterListResponse[]): Promise<string> {
 		if (!volume.id || !volume.title || !volume.seriesId) {
 			throw new Error("Volume must have id, title, and seriesId");
 		}
 
 		await this.structure.createVolumeFolder(seriesTitle, volume.title, volume.order);
+		if (this.settings?.includeMetadataFiles === false) {
+			return "";
+		}
+
 		const filePath = this.structure.getVolumeMetadataPath(seriesTitle, volume.title, volume.order);
 
 		const frontmatter = createVolumeFrontmatter(volume.id, volume.seriesId, volume.title, volume.order, {
 			publicationDate: volume.metadata?.publicationDate || undefined,
 			isbn: volume.metadata?.isbn || undefined,
 			coverImage: volume.metadata?.coverImage || undefined,
+			seriesTitle: seriesTitle,
+			chapters: chapters,
+			linkStyle: this.settings?.linkStyle,
+			includeMetadataFiles: this.settings?.includeMetadataFiles,
+			includeFrontmatter: this.settings?.includeFrontmatter,
 		});
 
 		const content = createMarkdownWithFrontmatter(frontmatter, "");
@@ -99,7 +119,13 @@ export class FileManager {
 			chapter.id,
 			chapter.volumeId,
 			chapter.title,
-			chapter.order
+			chapter.order,
+			{
+				volumeTitle: volumeTitle,
+				linkStyle: this.settings?.linkStyle,
+				includeMetadataFiles: this.settings?.includeMetadataFiles,
+				includeFrontmatter: this.settings?.includeFrontmatter,
+			}
 		);
 
 		const chapterContent = chapter.markdown ?? "";

@@ -7,6 +7,7 @@ import type { GrimoireApi } from "../api";
 import { FileManager, VaultStructure } from "../vault";
 import { PullSync, PullProgress } from "./pull";
 import type { SyncResult, SyncState, SeriesResponse } from "../types";
+import type { GrimoireSyncSettings } from "../settings";
 
 export class SyncManager {
 	private api: GrimoireApi;
@@ -14,23 +15,24 @@ export class SyncManager {
 	private structure: VaultStructure;
 	private pullSync: PullSync;
 	private state: SyncState;
+	private settings: GrimoireSyncSettings;
 
-	constructor(app: App, api: GrimoireApi, syncFolder: string, imagesFolder: string = "images") {
+	constructor(app: App, api: GrimoireApi, settings: GrimoireSyncSettings) {
 		this.api = api;
-		this.structure = new VaultStructure(app, syncFolder, imagesFolder);
-		this.fileManager = new FileManager(app, this.structure, api);
-		this.pullSync = new PullSync(api, this.fileManager, this.structure, app);
+		this.settings = settings;
+		this.structure = new VaultStructure(app, settings.syncFolder, settings.imagesFolder);
+		this.fileManager = new FileManager(app, this.structure, api, settings);
+		this.pullSync = new PullSync(api, this.fileManager, this.structure, app, settings);
 		this.state = { status: "idle" };
 	}
 
 	/**
 	 * Update configuration
 	 */
-	configure(syncFolder: string, imagesFolder?: string): void {
-		this.structure.setSyncFolder(syncFolder);
-		if (imagesFolder !== undefined) {
-			this.structure.setImagesFolder(imagesFolder);
-		}
+	configure(settings: GrimoireSyncSettings): void {
+		this.settings = settings;
+		this.structure.setSyncFolder(settings.syncFolder);
+		this.structure.setImagesFolder(settings.imagesFolder);
 	}
 
 	/**

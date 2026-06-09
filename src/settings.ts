@@ -20,6 +20,16 @@ export interface GrimoireSyncSettings {
 	syncOnStartup: boolean;
 	/** Periodic sync interval in minutes */
 	syncIntervalMinutes: number;
+	/** Footnote style parameter passed to content generation */
+	footnoteStyle: "Parentheses" | "SquareBrackets" | "Asterisk" | "SuperScript";
+	/** Wrap first character of chapter in a dropcap span */
+	enableDropcap: boolean;
+	/** Internal note link formatting style */
+	linkStyle: "WikiLinks" | "MarkdownLinks";
+	/** Generate _series.md and _volume.md notes */
+	includeMetadataFiles: boolean;
+	/** Prepend frontmatter carrying Grimoire tracking IDs */
+	includeFrontmatter: boolean;
 }
 
 export const DEFAULT_SETTINGS: GrimoireSyncSettings = {
@@ -30,6 +40,11 @@ export const DEFAULT_SETTINGS: GrimoireSyncSettings = {
 	enableAutoSync: false,
 	syncOnStartup: false,
 	syncIntervalMinutes: 15,
+	footnoteStyle: "Parentheses",
+	enableDropcap: false,
+	linkStyle: "WikiLinks",
+	includeMetadataFiles: true,
+	includeFrontmatter: true,
 };
 
 export class GrimoireSyncSettingTab extends PluginSettingTab {
@@ -97,6 +112,80 @@ export class GrimoireSyncSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.imagesFolder)
 					.onChange(async (value) => {
 						this.plugin.settings.imagesFolder = value.trim() || "images";
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// Formatting Options Section
+		new Setting(containerEl).setName("Formatting & Links").setHeading();
+
+		// Footnote Style
+		new Setting(containerEl)
+			.setName("Footnote style")
+			.setDesc("The style used to format footnotes when pulling content")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("Parentheses", "(1) Parentheses")
+					.addOption("SquareBrackets", "[1] Square Brackets")
+					.addOption("Asterisk", "* Asterisk")
+					.addOption("SuperScript", "1 Superscript")
+					.setValue(this.plugin.settings.footnoteStyle)
+					.onChange(async (value) => {
+						this.plugin.settings.footnoteStyle = value as any;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// Enable Dropcaps
+		new Setting(containerEl)
+			.setName("Enable dropcaps")
+			.setDesc("Format the first letter of each chapter as a dropcap span")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enableDropcap)
+					.onChange(async (value) => {
+						this.plugin.settings.enableDropcap = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// Link Style
+		new Setting(containerEl)
+			.setName("Link style")
+			.setDesc("Style of internal links generated between notes")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("WikiLinks", "[[WikiLinks]]")
+					.addOption("MarkdownLinks", "[MarkdownLinks](path.md)")
+					.setValue(this.plugin.settings.linkStyle)
+					.onChange(async (value) => {
+						this.plugin.settings.linkStyle = value as any;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// Include Metadata Files
+		new Setting(containerEl)
+			.setName("Include metadata files")
+			.setDesc("Create _series.md and _volume.md files containing book metadata")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.includeMetadataFiles)
+					.onChange(async (value) => {
+						this.plugin.settings.includeMetadataFiles = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// Include Frontmatter
+		new Setting(containerEl)
+			.setName("Include frontmatter tracking")
+			.setDesc("Include Grimoire ID and synchronization metadata in file frontmatter")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.includeFrontmatter)
+					.onChange(async (value) => {
+						this.plugin.settings.includeFrontmatter = value;
 						await this.plugin.saveSettings();
 					})
 			);
