@@ -10,6 +10,8 @@ import type {
 	UpdateSeriesRequest,
 	PagedResult,
 	VolumeResponse,
+	BookTreeDto,
+	SyncSeriesRequestDto,
 } from "../types";
 
 export class SeriesApi {
@@ -137,5 +139,19 @@ export class SeriesApi {
 		}
 
 		return all;
+	}
+
+	/**
+	 * Synchronize a series tree structure
+	 */
+	async syncTree(id: string, data: SyncSeriesRequestDto): Promise<void> {
+		await this.client.post<void>(`/api/v1/series/${id}/sync`, data);
+	}
+
+	/**
+	 * Get the tree structure of a series
+	 */
+	async getTree(id: string): Promise<BookTreeDto> {
+		return this.client.get<BookTreeDto>(`/api/v1/series/${id}/tree`);
 	}
 }

@@ -1,10 +1,10 @@
 /**
- * Pull sync - Fetch content from Grimoire API and write to vault
+ * Bidirectional sync - Sync content between Grimoire API and vault
  * 
  * Sync flow:
- * 1. Sync all series first
- * 2. For each synced series → sync its volumes
- * 3. For each synced volume → sync its chapters
+ * 1. Sync series (Pull/Push based on modification time)
+ * 2. Sync volumes (Pull/Push based on modification time)
+ * 3. Sync chapters (Pull/Push based on modification time, auto-creates new chapters)
  */
 
 import type { GrimoireApi } from "../api";
@@ -12,13 +12,13 @@ import type { FileManager, VaultStructure } from "../vault";
 import type {
 	SeriesResponse,
 	VolumeResponse,
-	ChapterListResponse,
 	ChapterResponse,
 	SyncResult,
 	AssetListingDto,
 } from "../types";
-import { App, TFile } from "obsidian";
-import { joinPath } from "../utils";
+import { App, TFile, TFolder, normalizePath } from "obsidian";
+import { joinPath, extractOrderFromName } from "../utils";
+import { parseFrontmatter } from "../vault/frontmatter";
 
 export interface PullProgress {
 	phase: "series" | "volumes" | "chapters";
@@ -29,18 +29,9 @@ export interface PullProgress {
 
 export type ProgressCallback = (progress: PullProgress) => void;
 
-/** Tracks a synced series with its metadata needed for volume sync */
 interface SyncedSeries {
 	id: string;
 	title: string;
-}
-
-/** Tracks a synced volume with its metadata needed for chapter sync */
-interface SyncedVolume {
-	id: string;
-	title: string;
-	order: number;
-	seriesTitle: string;
 }
 
 export class PullSync {
@@ -52,22 +43,19 @@ export class PullSync {
 	) {}
 
 	/**
-	 * Pull all series from the API
-	 * 
-	 * Flow: Sync all series → sync volumes for synced series → sync chapters for synced volumes
+	 * Pull/Sync all series from/to the API (Bidirectional Sync)
 	 */
 	async pullAllSeries(onProgress?: ProgressCallback): Promise<SyncResult> {
 		const result: SyncResult = {
 			success: true,
 			pulled: { series: 0, volumes: 0, chapters: 0 },
+			pushed: { series: 0, volumes: 0, chapters: 0 },
 			errors: [],
 		};
 
 		try {
-			// Ensure sync folder exists
 			await this.structure.ensureSyncFolder();
 
-			// === PHASE 1: Sync all series ===
 			onProgress?.({
 				phase: "series",
 				current: 0,
@@ -75,187 +63,80 @@ export class PullSync {
 				message: "Fetching series list...",
 			});
 
-			const seriesList = await this.api.series.listAll();
+			const remoteSeriesList = await this.api.series.listAll();
+			const localSeriesList = await this.structure.findAllSeries();
 
 			onProgress?.({
 				phase: "series",
 				current: 0,
-				total: seriesList.length,
-				message: `Found ${seriesList.length} series`,
+				total: remoteSeriesList.length,
+				message: `Found ${remoteSeriesList.length} series on server`,
 			});
 
-			const syncedSeries: SyncedSeries[] = [];
+			const localSeriesMap = new Map<string, typeof localSeriesList[0]>();
+			for (const ls of localSeriesList) {
+				if (ls.frontmatter.grimoire_id) {
+					localSeriesMap.set(ls.frontmatter.grimoire_id, ls);
+				}
+			}
 
-			for (let i = 0; i < seriesList.length; i++) {
-				const series = seriesList[i];
-				if (!series?.id || !series.title) continue;
+			for (let i = 0; i < remoteSeriesList.length; i++) {
+				const remote = remoteSeriesList[i];
+				if (!remote?.id || !remote.title) continue;
 
 				onProgress?.({
 					phase: "series",
 					current: i + 1,
-					total: seriesList.length,
-					message: `Syncing series: ${series.title}`,
+					total: remoteSeriesList.length,
+					message: `Syncing series: ${remote.title}`,
 				});
 
 				try {
-					// Fetch series content separately
-					const contentResponse = await this.api.series.getContent(series.id);
-					if (contentResponse?.data) {
-						series.markdown = contentResponse.data;
-					}
-					if (contentResponse?.assets && contentResponse.assets.length > 0) {
-						series.markdown = await this.processContentAssets(
-							contentResponse.assets,
-							series.markdown ?? "",
-							series.title
-						);
+					const local = localSeriesMap.get(remote.id);
+					let activeSeriesTitle = remote.title;
+
+					if (local) {
+						const file = this.app.vault.getAbstractFileByPath(local.metadataPath);
+						if (file instanceof TFile) {
+							const localEdited = this.isLocallyModified(file);
+							const remoteNewer = this.isRemoteNewer(remote.updatedAt, file);
+							activeSeriesTitle = local.frontmatter.title || remote.title;
+
+							if (localEdited && remoteNewer) {
+								const localTime = file.stat.mtime;
+								const remoteTime = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
+								if (localTime > remoteTime) {
+									await this.pushSeries(file, remote);
+									result.pushed!.series++;
+								} else {
+									await this.pullSeriesMetadata(remote);
+									result.pulled!.series++;
+								}
+							} else if (localEdited) {
+								await this.pushSeries(file, remote);
+								result.pushed!.series++;
+							} else if (remoteNewer) {
+								await this.pullSeriesMetadata(remote);
+								result.pulled!.series++;
+							}
+						}
+					} else {
+						await this.pullSeriesMetadata(remote);
+						result.pulled!.series++;
 					}
 
-					await this.syncSeriesFile(series);
-					syncedSeries.push({ id: series.id, title: series.title });
-					if (result.pulled) {
-						result.pulled.series++;
-					}
+					// Sync volumes for this series
+					await this.syncVolumes(remote, activeSeriesTitle, result, onProgress);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : "Unknown error";
-					result.errors.push(`Failed to sync series "${series.title}": ${message}`);
-				}
-			}
-
-			// === PHASE 2: Sync volumes for all synced series ===
-			const syncedVolumes: SyncedVolume[] = [];
-			let totalVolumes = 0;
-			let volumeCount = 0;
-
-			// First, count total volumes for progress
-			const volumesBySeriesId = new Map<string, VolumeResponse[]>();
-			for (const series of syncedSeries) {
-				try {
-					const volumes = await this.api.series.getAllVolumes(series.id);
-					volumesBySeriesId.set(series.id, volumes);
-					totalVolumes += volumes.length;
-				} catch (error) {
-					const message = error instanceof Error ? error.message : "Unknown error";
-					result.errors.push(`Failed to fetch volumes for "${series.title}": ${message}`);
-				}
-			}
-
-			onProgress?.({
-				phase: "volumes",
-				current: 0,
-				total: totalVolumes,
-				message: `Syncing ${totalVolumes} volumes...`,
-			});
-
-			for (const series of syncedSeries) {
-				const volumes = volumesBySeriesId.get(series.id) ?? [];
-
-				for (const volume of volumes) {
-					if (!volume?.id || !volume.title) continue;
-
-					volumeCount++;
-					onProgress?.({
-						phase: "volumes",
-						current: volumeCount,
-						total: totalVolumes,
-						message: `Syncing volume: ${volume.title}`,
-					});
-
-					try {
-						await this.syncVolumeFile(volume, series.title);
-						syncedVolumes.push({
-							id: volume.id,
-							title: volume.title,
-							order: volume.order ?? 0,
-							seriesTitle: series.title,
-						});
-						if (result.pulled) {
-							result.pulled.volumes++;
-						}
-					} catch (error) {
-						const message = error instanceof Error ? error.message : "Unknown error";
-						result.errors.push(`Failed to sync volume "${volume.title}": ${message}`);
-					}
-				}
-			}
-
-			// === PHASE 3: Sync chapters for all synced volumes ===
-			let totalChapters = 0;
-			let chapterCount = 0;
-
-			// First, count total chapters for progress
-			const chaptersByVolumeId = new Map<string, ChapterListResponse[]>();
-			for (const volume of syncedVolumes) {
-				try {
-					const chapters = await this.api.volumes.getAllChapters(volume.id);
-					chaptersByVolumeId.set(volume.id, chapters);
-					totalChapters += chapters.length;
-				} catch (error) {
-					const message = error instanceof Error ? error.message : "Unknown error";
-					result.errors.push(`Failed to fetch chapters for "${volume.title}": ${message}`);
-				}
-			}
-
-			onProgress?.({
-				phase: "chapters",
-				current: 0,
-				total: totalChapters,
-				message: `Syncing ${totalChapters} chapters...`,
-			});
-
-			for (const volume of syncedVolumes) {
-				const chapterList = chaptersByVolumeId.get(volume.id) ?? [];
-
-				for (const chapterInfo of chapterList) {
-					if (!chapterInfo.id) continue;
-
-					chapterCount++;
-					onProgress?.({
-						phase: "chapters",
-						current: chapterCount,
-						total: totalChapters,
-						message: `Syncing chapter: ${chapterInfo.title}`,
-					});
-
-					try {
-						// Fetch full chapter metadata
-						const chapter = await this.api.chapters.get(chapterInfo.id);
-						
-						// Fetch chapter content in markdown format
-						const contentResponse = await this.api.chapters.getContent(chapterInfo.id);
-						if (contentResponse?.data) {
-							chapter.markdown = contentResponse.data;
-						}
-						
-						// Process assets from content response
-						if (contentResponse?.assets && contentResponse.assets.length > 0) {
-							chapter.markdown = await this.processContentAssets(
-								contentResponse.assets,
-								chapter.markdown ?? "",
-								volume.seriesTitle
-							);
-						}
-
-						await this.fileManager.writeChapterFile(
-							chapter,
-							volume.seriesTitle,
-							volume.title,
-							volume.order
-						);
-						if (result.pulled) {
-							result.pulled.chapters++;
-						}
-					} catch (error) {
-						const message = error instanceof Error ? error.message : "Unknown error";
-						result.errors.push(`Failed to sync chapter "${chapterInfo.title}": ${message}`);
-					}
+					result.errors.push(`Failed to sync series "${remote.title}": ${message}`);
 				}
 			}
 
 			result.success = result.errors.length === 0;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "Unknown error";
-			result.errors.push(`Pull failed: ${message}`);
+			result.errors.push(`Sync failed: ${message}`);
 			result.success = false;
 		}
 
@@ -263,167 +144,376 @@ export class PullSync {
 	}
 
 	/**
-	 * Pull a specific series by ID (series + volumes + chapters)
+	 * Pull/Sync a specific series by ID (Bidirectional Sync)
 	 */
 	async pullSeries(seriesId: string, onProgress?: ProgressCallback): Promise<SyncResult> {
 		const result: SyncResult = {
 			success: true,
 			pulled: { series: 0, volumes: 0, chapters: 0 },
+			pushed: { series: 0, volumes: 0, chapters: 0 },
 			errors: [],
 		};
 
 		try {
-			// === PHASE 1: Sync series ===
-			const series = await this.api.series.get(seriesId);
-
-			if (!series.id || !series.title) {
+			const remote = await this.api.series.get(seriesId);
+			if (!remote.id || !remote.title) {
 				throw new Error("Invalid series data");
 			}
 
-			// Fetch series content in markdown format
-			const contentResponse = await this.api.series.getContent(seriesId);
-			if (contentResponse?.data) {
-				series.markdown = contentResponse.data;
-			}
-			if (contentResponse?.assets && contentResponse.assets.length > 0) {
-				series.markdown = await this.processContentAssets(
-					contentResponse.assets,
-					series.markdown ?? "",
-					series.title
-				);
-			}
+			const localSeries = await this.structure.findSeriesById(seriesId);
+			let activeSeriesTitle = remote.title;
 
-			onProgress?.({
-				phase: "series",
-				current: 1,
-				total: 1,
-				message: `Syncing series: ${series.title}`,
-			});
+			if (localSeries) {
+				const file = this.app.vault.getAbstractFileByPath(localSeries.metadataPath);
+				if (file instanceof TFile) {
+					const localEdited = this.isLocallyModified(file);
+					const remoteNewer = this.isRemoteNewer(remote.updatedAt, file);
+					activeSeriesTitle = localSeries.frontmatter.title || remote.title;
 
-			await this.syncSeriesFile(series);
-			if (result.pulled) {
-				result.pulled.series = 1;
-			}
-
-			// === PHASE 2: Sync volumes ===
-			const volumes = await this.api.series.getAllVolumes(seriesId);
-
-			onProgress?.({
-				phase: "volumes",
-				current: 0,
-				total: volumes.length,
-				message: `Syncing ${volumes.length} volumes for "${series.title}"`,
-			});
-
-			const syncedVolumes: SyncedVolume[] = [];
-
-			for (let i = 0; i < volumes.length; i++) {
-				const volume = volumes[i];
-				if (!volume?.id || !volume.title) continue;
-
-				onProgress?.({
-					phase: "volumes",
-					current: i + 1,
-					total: volumes.length,
-					message: `Syncing volume: ${volume.title}`,
-				});
-
-				try {
-					await this.syncVolumeFile(volume, series.title);
-					syncedVolumes.push({
-						id: volume.id,
-						title: volume.title,
-						order: volume.order ?? 0,
-						seriesTitle: series.title,
-					});
-					if (result.pulled) {
-						result.pulled.volumes++;
-					}
-				} catch (error) {
-					const message = error instanceof Error ? error.message : "Unknown error";
-					result.errors.push(`Failed to sync volume "${volume.title}": ${message}`);
-				}
-			}
-
-			// === PHASE 3: Sync chapters for synced volumes ===
-			let totalChapters = 0;
-			let chapterCount = 0;
-
-			const chaptersByVolumeId = new Map<string, ChapterListResponse[]>();
-			for (const volume of syncedVolumes) {
-				try {
-					const chapters = await this.api.volumes.getAllChapters(volume.id);
-					chaptersByVolumeId.set(volume.id, chapters);
-					totalChapters += chapters.length;
-				} catch (error) {
-					const message = error instanceof Error ? error.message : "Unknown error";
-					result.errors.push(`Failed to fetch chapters for "${volume.title}": ${message}`);
-				}
-			}
-
-			onProgress?.({
-				phase: "chapters",
-				current: 0,
-				total: totalChapters,
-				message: `Syncing ${totalChapters} chapters...`,
-			});
-
-			for (const volume of syncedVolumes) {
-				const chapterList = chaptersByVolumeId.get(volume.id) ?? [];
-
-				for (const chapterInfo of chapterList) {
-					if (!chapterInfo.id) continue;
-
-					chapterCount++;
-					onProgress?.({
-						phase: "chapters",
-						current: chapterCount,
-						total: totalChapters,
-						message: `Syncing chapter: ${chapterInfo.title}`,
-					});
-
-					try {
-						const chapter = await this.api.chapters.get(chapterInfo.id);
-						
-						// Fetch chapter content in markdown format
-						const contentResponse = await this.api.chapters.getContent(chapterInfo.id);
-						if (contentResponse?.data) {
-							chapter.markdown = contentResponse.data;
+					if (localEdited && remoteNewer) {
+						const localTime = file.stat.mtime;
+						const remoteTime = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
+						if (localTime > remoteTime) {
+							await this.pushSeries(file, remote);
+							result.pushed!.series++;
+						} else {
+							await this.pullSeriesMetadata(remote);
+							result.pulled!.series++;
 						}
-						
-						// Process assets from content response
-						if (contentResponse?.assets && contentResponse.assets.length > 0) {
-							chapter.markdown = await this.processContentAssets(
-								contentResponse.assets,
-								chapter.markdown ?? "",
-								volume.seriesTitle
-							);
-						}
-
-						await this.fileManager.writeChapterFile(
-							chapter,
-							volume.seriesTitle,
-							volume.title,
-							volume.order
-						);
-						if (result.pulled) {
-							result.pulled.chapters++;
-						}
-					} catch (error) {
-						const message = error instanceof Error ? error.message : "Unknown error";
-						result.errors.push(`Failed to sync chapter "${chapterInfo.title}": ${message}`);
+					} else if (localEdited) {
+						await this.pushSeries(file, remote);
+						result.pushed!.series++;
+					} else if (remoteNewer) {
+						await this.pullSeriesMetadata(remote);
+						result.pulled!.series++;
 					}
 				}
+			} else {
+				await this.pullSeriesMetadata(remote);
+				result.pulled!.series++;
 			}
 
+			await this.syncVolumes(remote, activeSeriesTitle, result, onProgress);
 			result.success = result.errors.length === 0;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "Unknown error";
-			result.errors.push(`Failed to pull series: ${message}`);
+			result.errors.push(`Failed to sync series: ${message}`);
 			result.success = false;
 		}
 
 		return result;
+	}
+
+	/**
+	 * Sync volumes for a series
+	 */
+	private async syncVolumes(
+		series: SeriesResponse,
+		seriesTitle: string,
+		result: SyncResult,
+		onProgress?: ProgressCallback
+	): Promise<void> {
+		const remoteVolumes = await this.api.series.getAllVolumes(series.id!);
+		const seriesFolderPath = this.structure.getSeriesFolderPath(seriesTitle);
+		const localVolumes = await this.structure.findVolumesInSeries(seriesFolderPath);
+
+		const localVolumeMap = new Map<string, typeof localVolumes[0]>();
+		for (const lv of localVolumes) {
+			if (lv.frontmatter.grimoire_id) {
+				localVolumeMap.set(lv.frontmatter.grimoire_id, lv);
+			}
+		}
+
+		for (const remote of remoteVolumes) {
+			if (!remote?.id || !remote.title) continue;
+
+			try {
+				const local = localVolumeMap.get(remote.id);
+				let activeVolumeTitle = remote.title;
+				let activeVolumeOrder = remote.order;
+
+				if (local) {
+					const file = this.app.vault.getAbstractFileByPath(local.metadataPath);
+					if (file instanceof TFile) {
+						const localEdited = this.isLocallyModified(file);
+						const remoteNewer = this.isRemoteNewer(remote.updatedAt, file);
+						activeVolumeTitle = local.frontmatter.title || remote.title;
+						activeVolumeOrder = local.frontmatter.order;
+
+						if (localEdited && remoteNewer) {
+							const localTime = file.stat.mtime;
+							const remoteTime = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0;
+							if (localTime > remoteTime) {
+								await this.pushVolume(file, remote, seriesTitle);
+								result.pushed!.volumes++;
+							} else {
+								await this.syncVolumeFile(remote, seriesTitle);
+								result.pulled!.volumes++;
+							}
+						} else if (localEdited) {
+							await this.pushVolume(file, remote, seriesTitle);
+							result.pushed!.volumes++;
+						} else if (remoteNewer) {
+							await this.syncVolumeFile(remote, seriesTitle);
+							result.pulled!.volumes++;
+						}
+					}
+				} else {
+					await this.syncVolumeFile(remote, seriesTitle);
+					result.pulled!.volumes++;
+				}
+
+				// Sync chapters for this volume
+				const volumeFolderPath = this.structure.getVolumeFolderPath(seriesTitle, activeVolumeTitle, activeVolumeOrder);
+				await this.syncChapters(remote, series, seriesTitle, activeVolumeTitle, activeVolumeOrder, volumeFolderPath, result, onProgress);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "Unknown error";
+				result.errors.push(`Failed to sync volume "${remote.title}": ${message}`);
+			}
+		}
+	}
+
+	/**
+	 * Sync chapters for a volume
+	 */
+	private async syncChapters(
+		volume: VolumeResponse,
+		series: SeriesResponse,
+		seriesTitle: string,
+		volumeTitle: string,
+		volumeOrder: number,
+		volumeFolderPath: string,
+		result: SyncResult,
+		onProgress?: ProgressCallback
+	): Promise<void> {
+		const localChapters = await this.structure.findChaptersInVolume(volumeFolderPath);
+		const remoteChapters = await this.api.volumes.getAllChapters(volume.id!);
+
+		const localChapterMap = new Map<string, typeof localChapters[0]>();
+		const localNewChapters: typeof localChapters = [];
+		for (const lc of localChapters) {
+			if (lc.frontmatter.grimoire_id) {
+				localChapterMap.set(lc.frontmatter.grimoire_id, lc);
+			} else {
+				localNewChapters.push(lc);
+			}
+		}
+
+		// 1. Sync remote chapters
+		for (const rc of remoteChapters) {
+			if (!rc.id) continue;
+			const lc = localChapterMap.get(rc.id);
+
+			try {
+				if (lc) {
+					const file = this.app.vault.getAbstractFileByPath(lc.filePath);
+					if (file instanceof TFile) {
+						const localEdited = this.isLocallyModified(file);
+						const remoteNewer = this.isRemoteNewer(rc.updatedAt, file);
+
+						if (localEdited && remoteNewer) {
+							const localTime = file.stat.mtime;
+							const remoteTime = rc.updatedAt ? new Date(rc.updatedAt).getTime() : 0;
+							if (localTime > remoteTime) {
+								await this.pushChapter(file, rc, volume.id!, seriesTitle, volumeTitle, volumeOrder);
+								result.pushed!.chapters++;
+							} else {
+								await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder);
+								result.pulled!.chapters++;
+							}
+						} else if (localEdited) {
+							await this.pushChapter(file, rc, volume.id!, seriesTitle, volumeTitle, volumeOrder);
+							result.pushed!.chapters++;
+						} else if (remoteNewer) {
+							await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder);
+							result.pulled!.chapters++;
+						}
+					}
+				} else {
+					await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder);
+					result.pulled!.chapters++;
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "Unknown error";
+				result.errors.push(`Failed to sync chapter "${rc.title}": ${message}`);
+			}
+		}
+
+		// 2. Create local-only chapters on server
+		for (const lc of localNewChapters) {
+			try {
+				const file = this.app.vault.getAbstractFileByPath(lc.filePath);
+				if (file instanceof TFile) {
+					await this.pushChapter(file, null, volume.id!, seriesTitle, volumeTitle, volumeOrder);
+					result.pushed!.chapters++;
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "Unknown error";
+				result.errors.push(`Failed to create chapter "${lc.frontmatter.title}": ${message}`);
+			}
+		}
+	}
+
+	/**
+	 * Pull series metadata & description
+	 */
+	private async pullSeriesMetadata(series: SeriesResponse): Promise<void> {
+		const contentResponse = await this.api.series.getContent(series.id!);
+		if (contentResponse?.data) {
+			series.markdown = contentResponse.data;
+		}
+		if (contentResponse?.assets && contentResponse.assets.length > 0) {
+			series.markdown = await this.processContentAssets(
+				contentResponse.assets,
+				series.markdown ?? "",
+				series.title!
+			);
+		}
+		await this.syncSeriesFile(series);
+	}
+
+	/**
+	 * Pull a single chapter by ID
+	 */
+	private async pullChapter(id: string, seriesTitle: string, volumeTitle: string, volumeOrder: number): Promise<void> {
+		const chapter = await this.api.chapters.get(id);
+		const contentResponse = await this.api.chapters.getContent(id);
+		if (contentResponse?.data) {
+			chapter.markdown = contentResponse.data;
+		}
+		if (contentResponse?.assets && contentResponse.assets.length > 0) {
+			chapter.markdown = await this.processContentAssets(
+				contentResponse.assets,
+				chapter.markdown ?? "",
+				seriesTitle
+			);
+		}
+		await this.fileManager.writeChapterFile(chapter, seriesTitle, volumeTitle, volumeOrder);
+	}
+
+	/**
+	 * Push local series changes to server
+	 */
+	private async pushSeries(file: TFile, remoteSeries: SeriesResponse): Promise<void> {
+		const content = await this.app.vault.read(file);
+		const { frontmatter } = parseFrontmatter(content);
+
+		const title = String(frontmatter?.["title"] || remoteSeries.title || "");
+		const authors = (frontmatter?.["authors"] as string[]) || [];
+		const artists = (frontmatter?.["artists"] as string[]) || [];
+		const tags = (frontmatter?.["tags"] as string[]) || [];
+
+		const updatedRemote = await this.api.series.update(remoteSeries.id!, {
+			title,
+			metadata: {
+				authors,
+				artists,
+				tags,
+				description: remoteSeries.metadata?.description || []
+			}
+		});
+
+		await this.fileManager.writeSeriesFile(updatedRemote);
+	}
+
+	/**
+	 * Push local volume changes to server
+	 */
+	private async pushVolume(file: TFile, remoteVolume: VolumeResponse, seriesTitle: string): Promise<void> {
+		const content = await this.app.vault.read(file);
+		const { frontmatter } = parseFrontmatter(content);
+
+		const title = String(frontmatter?.["title"] || remoteVolume.title || "");
+		const order = Number(frontmatter?.["order"]) || remoteVolume.order || 0;
+		const publicationDate = (frontmatter?.["publication_date"] as string) || undefined;
+		const isbn = (frontmatter?.["isbn"] as string) || undefined;
+
+		const updatedRemote = await this.api.volumes.update(remoteVolume.id!, {
+			title,
+			order,
+			metadata: {
+				publicationDate,
+				isbn,
+				coverImage: remoteVolume.metadata?.coverImage || undefined
+			}
+		});
+
+		await this.fileManager.writeVolumeFile(updatedRemote, seriesTitle);
+
+		const newMetadataPath = this.structure.getVolumeMetadataPath(seriesTitle, title, order);
+		if (normalizePath(file.path) !== normalizePath(newMetadataPath)) {
+			await this.app.fileManager.trashFile(file);
+		}
+	}
+
+	/**
+	 * Push local chapter changes to server
+	 */
+	private async pushChapter(
+		file: TFile,
+		remoteChapter: any,
+		volumeId: string,
+		seriesTitle: string,
+		volumeTitle: string,
+		volumeOrder: number
+	): Promise<void> {
+		const content = await this.app.vault.read(file);
+		const { frontmatter, content: body } = parseFrontmatter(content);
+
+		const title = String(frontmatter?.["title"] || file.basename.replace(/^\d+\s*-\s*/, ""));
+		const order = Number(frontmatter?.["order"]) || extractOrderFromName(file.basename) || 0;
+
+		if (remoteChapter && remoteChapter.id) {
+			if (title !== remoteChapter.title || order !== remoteChapter.order) {
+				await this.api.chapters.update(remoteChapter.id, {
+					title,
+					order
+				});
+			}
+		}
+
+		const updatedChapter = await this.api.chapters.create({
+			volumeId,
+			order,
+			title,
+			rawContent: body
+		});
+
+		await this.fileManager.writeChapterFile(updatedChapter, seriesTitle, volumeTitle, volumeOrder);
+
+		const newFilePath = this.structure.getChapterFilePath(seriesTitle, volumeTitle, volumeOrder, title, order);
+		if (normalizePath(file.path) !== normalizePath(newFilePath)) {
+			await this.app.fileManager.trashFile(file);
+		}
+	}
+
+	/**
+	 * Helper to get local last synced timestamp
+	 */
+	private getLocalLastSynced(file: TFile): number {
+		const cache = this.app.metadataCache.getFileCache(file);
+		const lastSynced = cache?.frontmatter?.["last_synced"];
+		if (!lastSynced) return 0;
+		return new Date(lastSynced).getTime();
+	}
+
+	/**
+	 * Helper to check if file was modified locally since last sync
+	 */
+	private isLocallyModified(file: TFile): boolean {
+		const lastSynced = this.getLocalLastSynced(file);
+		if (lastSynced === 0) return true;
+		return file.stat.mtime > lastSynced + 5000;
+	}
+
+	/**
+	 * Helper to check if remote was modified since last sync
+	 */
+	private isRemoteNewer(remoteUpdatedAt: string | null | undefined, file: TFile): boolean {
+		if (!remoteUpdatedAt) return false;
+		const lastSynced = this.getLocalLastSynced(file);
+		const remoteTime = new Date(remoteUpdatedAt).getTime();
+		return remoteTime > lastSynced + 5000;
 	}
 
 	/**
@@ -434,10 +524,8 @@ export class PullSync {
 			throw new Error("Invalid series data");
 		}
 
-		// Write series metadata file
 		await this.fileManager.writeSeriesFile(series);
 
-		// Download series cover image if available
 		const coverImageId = series.metadata?.coverImage;
 		if (coverImageId) {
 			const seriesFolderPath = this.structure.getSeriesFolderPath(series.title);
@@ -454,10 +542,8 @@ export class PullSync {
 			throw new Error("Invalid volume data");
 		}
 
-		// Write volume metadata file
 		await this.fileManager.writeVolumeFile(volume, seriesTitle);
 
-		// Download volume cover image if available
 		const volumeCoverId = volume.metadata?.coverImage;
 		if (volumeCoverId) {
 			const volumeFolderPath = this.structure.getVolumeFolderPath(
@@ -497,8 +583,6 @@ export class PullSync {
 					await this.app.vault.createBinary(normalizedPath, buffer);
 				}
 
-				// Replace markdown image references like `![Image](assetId)` with local path
-				// URL-encode path segments to handle spaces/special chars in folder/file names
 				const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
 				const refPattern = `](${asset.id})`;
 				while (processedMarkdown.includes(refPattern)) {

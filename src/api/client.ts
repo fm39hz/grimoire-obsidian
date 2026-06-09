@@ -3,7 +3,7 @@
  */
 
 import { requestUrl, RequestUrlParam, RequestUrlResponse } from "obsidian";
-import type { ProblemDetails } from "../types";
+import type { ProblemDetails, JobResponse } from "../types";
 
 export interface ApiClientConfig {
 	baseUrl: string;
@@ -119,6 +119,62 @@ export class ApiClient {
 		}
 
 		return response.json;
+	}
+
+	/**
+	 * Import a book EPUB with metadata using multipart/form-data
+	 */
+	async importBook(
+		path: string,
+		file: ArrayBuffer,
+		filename: string,
+		series: string,
+		volumes?: string
+	): Promise<JobResponse> {
+		const url = this.buildUrl(path);
+		const boundary = "----ObsidianGrimoireSync" + Date.now().toString(16);
+		const encoder = new TextEncoder();
+		const parts: Uint8Array[] = [];
+
+		// Add series part
+		const seriesHeader = `--${boundary}\r\nContent-Disposition: form-data; name="series"\r\nContent-Type: application/json\r\n\r\n${series}\r\n`;
+		parts.push(encoder.encode(seriesHeader));
+
+		// Add volumes part if provided
+		if (volumes) {
+			const volumesHeader = `--${boundary}\r\nContent-Disposition: form-data; name="volumes"\r\nContent-Type: application/json\r\n\r\n${volumes}\r\n`;
+			parts.push(encoder.encode(volumesHeader));
+		}
+
+		// Add file part
+		const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/epub+zip\r\n\r\n`;
+		parts.push(encoder.encode(fileHeader));
+		parts.push(new Uint8Array(file));
+		parts.push(encoder.encode(`\r\n--${boundary}--\r\n`));
+
+		// Combine all parts
+		const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
+		const body = new Uint8Array(totalLength);
+		let offset = 0;
+		for (const part of parts) {
+			body.set(part, offset);
+			offset += part.length;
+		}
+
+		const response = await requestUrl({
+			url,
+			method: "POST",
+			headers: {
+				"Content-Type": `multipart/form-data; boundary=${boundary}`,
+			},
+			body: body.buffer,
+		});
+
+		if (response.status >= 400) {
+			throw new ApiError(response.status, response.json as ProblemDetails);
+		}
+
+		return response.json as JobResponse;
 	}
 
 	/**

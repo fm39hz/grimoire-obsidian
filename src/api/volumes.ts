@@ -34,8 +34,10 @@ export class VolumesApi {
 	/**
 	 * Get a single volume by ID
 	 */
-	async get(id: string): Promise<VolumeResponse> {
-		return this.client.get<VolumeResponse>(`/api/v1/volumes/${id}`);
+	async get(id: string, options?: { timestamp?: boolean }): Promise<VolumeResponse> {
+		return this.client.get<VolumeResponse>(`/api/v1/volumes/${id}`, {
+			timestamp: options?.timestamp,
+		});
 	}
 
 	/**

@@ -137,6 +137,7 @@ export interface ChapterListResponse {
 	volumeId: string | null;
 	order: number;
 	title: string | null;
+	updatedAt?: string | null;
 }
 
 export interface ChapterResponse {
@@ -193,7 +194,7 @@ export interface AssetResponse {
 	refType: string;
 }
 
-export type AssetRefType = "Content" | "Cover" | string;
+export type AssetRefType = "Content" | "Cover" | (string & {});
 
 // ============================================================================
 // Bindery (Export) Types
@@ -241,10 +242,68 @@ export interface BinderyRequest {
 // ============================================================================
 
 export interface JobResponse {
-	id: string;
+	jobId: string;
 	status: string;
+	downloadUrl?: string | null;
+	error?: string | null;
 	progress?: number | null;
 	message?: string | null;
 	createdAt?: string | null;
 	updatedAt?: string | null;
 }
+
+// ============================================================================
+// Book Tree Types
+// ============================================================================
+
+export enum BookTreeNodeType {
+	BookShelf = 0,
+	Series = 1,
+	Volume = 2,
+	Chapter = 3,
+}
+
+export interface BookTreeNodeDto {
+	id: string;
+	type: BookTreeNodeType;
+	title: string;
+	order?: number | null;
+	parentId?: string | null;
+	children: BookTreeNodeDto[];
+}
+
+export interface BookTreeDto {
+	root: BookTreeNodeDto;
+}
+
+// ============================================================================
+// Sync Tree Types
+// ============================================================================
+
+export interface SyncChapterDto {
+	order: number;
+	title: string;
+	content?: Segment[] | null;
+	footnotes?: ImportFootnote[] | null;
+	rawContent?: string | null;
+}
+
+export interface SyncVolumeDto {
+	order: number;
+	title: string;
+	metadata?: VolumeMetadata | null;
+	chapters: SyncChapterDto[];
+}
+
+export interface SyncSeriesRequestDto {
+	volumes: SyncVolumeDto[];
+}
+
+// ============================================================================
+// Merge Chapter Types
+// ============================================================================
+
+export interface MergeChaptersRequest {
+	chapterIds: string[];
+}
+

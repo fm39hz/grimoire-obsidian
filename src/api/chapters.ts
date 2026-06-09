@@ -11,6 +11,7 @@ import type {
 	UpdateChapterRequest,
 	SplitChapterRequest,
 	PagedResult,
+	MergeChaptersRequest,
 } from "../types";
 
 export class ChaptersApi {
@@ -77,5 +78,12 @@ export class ChaptersApi {
 	 */
 	async split(id: string, data: SplitChapterRequest): Promise<ChapterResponse[]> {
 		return this.client.post<ChapterResponse[]>(`/api/v1/chapters/${id}/split`, data);
+	}
+
+	/**
+	 * Merge multiple chapters into one
+	 */
+	async merge(data: MergeChaptersRequest): Promise<ChapterResponse> {
+		return this.client.post<ChapterResponse>("/api/v1/chapters/merge", data);
 	}
 }

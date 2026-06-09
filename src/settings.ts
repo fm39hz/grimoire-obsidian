@@ -14,6 +14,12 @@ export interface GrimoireSyncSettings {
 	autoCreateFolders: boolean;
 	/** Subfolder name within each series folder for storing pulled images */
 	imagesFolder: string;
+	/** Enable auto sync */
+	enableAutoSync: boolean;
+	/** Run sync on startup */
+	syncOnStartup: boolean;
+	/** Periodic sync interval in minutes */
+	syncIntervalMinutes: number;
 }
 
 export const DEFAULT_SETTINGS: GrimoireSyncSettings = {
@@ -21,6 +27,9 @@ export const DEFAULT_SETTINGS: GrimoireSyncSettings = {
 	syncFolder: "Books",
 	autoCreateFolders: true,
 	imagesFolder: "images",
+	enableAutoSync: false,
+	syncOnStartup: false,
+	syncIntervalMinutes: 15,
 };
 
 export class GrimoireSyncSettingTab extends PluginSettingTab {
@@ -91,6 +100,52 @@ export class GrimoireSyncSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		// Auto Sync Section
+		new Setting(containerEl).setName("Auto sync settings").setHeading();
+
+		new Setting(containerEl)
+			.setName("Enable auto-sync")
+			.setDesc("Automatically sync content in the background")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enableAutoSync)
+					.onChange(async (value) => {
+						this.plugin.settings.enableAutoSync = value;
+						await this.plugin.saveSettings();
+						this.display(); // Refresh to show/hide other auto-sync options
+					})
+			);
+
+		if (this.plugin.settings.enableAutoSync) {
+			new Setting(containerEl)
+				.setName("Sync on startup")
+				.setDesc("Run a sync automatically when Obsidian opens")
+				.addToggle((toggle) =>
+					toggle
+						.setValue(this.plugin.settings.syncOnStartup)
+						.onChange(async (value) => {
+							this.plugin.settings.syncOnStartup = value;
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Sync interval (minutes)")
+				.setDesc("Minutes to wait between background syncs")
+				.addText((text) =>
+					text
+						.setPlaceholder("15")
+						.setValue(String(this.plugin.settings.syncIntervalMinutes))
+						.onChange(async (value) => {
+							const mins = parseInt(value, 10);
+							if (!isNaN(mins) && mins > 0) {
+								this.plugin.settings.syncIntervalMinutes = mins;
+								await this.plugin.saveSettings();
+							}
+						})
+				);
+		}
 
 		// Sync actions section
 		new Setting(containerEl).setName("Sync").setHeading();
