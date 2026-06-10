@@ -101,7 +101,8 @@ export class FileManager {
 		chapter: ChapterResponse,
 		seriesTitle: string,
 		volumeTitle: string,
-		volumeOrder: number
+		volumeOrder: number,
+		displayOrder?: number
 	): Promise<string> {
 		if (!chapter.id || !chapter.title || !chapter.volumeId) {
 			throw new Error("Chapter must have id, title, and volumeId");
@@ -112,7 +113,7 @@ export class FileManager {
 			volumeTitle,
 			volumeOrder,
 			chapter.title,
-			chapter.order
+			displayOrder !== undefined ? displayOrder : chapter.order
 		);
 
 		const frontmatter = createChapterFrontmatter(

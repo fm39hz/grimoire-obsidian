@@ -301,6 +301,9 @@ export class PullSync {
 		const localChapters = await this.structure.findChaptersInVolume(volumeFolderPath);
 		const remoteChapters = prefetchedChapters || await this.api.volumes.getAllChapters(volume.id!);
 
+		// Sort remote chapters by order ascending
+		const sortedRemoteChapters = [...remoteChapters].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
 		const localChapterMap = new Map<string, typeof localChapters[0]>();
 		const localNewChapters: typeof localChapters = [];
 		for (const lc of localChapters) {
@@ -311,10 +314,15 @@ export class PullSync {
 			}
 		}
 
+		const syncedRemoteIds = new Set<string>();
+
 		// 1. Sync remote chapters
-		for (const rc of remoteChapters) {
-			if (!rc.id) continue;
+		for (let i = 0; i < sortedRemoteChapters.length; i++) {
+			const rc = sortedRemoteChapters[i]!;
+			if (!rc.id || !rc.title) continue;
+			syncedRemoteIds.add(rc.id);
 			const lc = localChapterMap.get(rc.id);
+			const displayOrder = i + 1;
 
 			try {
 				if (lc) {
@@ -327,22 +335,49 @@ export class PullSync {
 							const localTime = file.stat.mtime;
 							const remoteTime = rc.updatedAt ? new Date(rc.updatedAt).getTime() : 0;
 							if (localTime > remoteTime) {
-								await this.pushChapter(file, rc, volume.id!, seriesTitle, volumeTitle, volumeOrder);
+								await this.pushChapter(file, rc, volume.id!, seriesTitle, volumeTitle, volumeOrder, displayOrder);
 								result.pushed!.chapters++;
 							} else {
-								await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder);
+								await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder, file, displayOrder);
 								result.pulled!.chapters++;
 							}
 						} else if (localEdited) {
-							await this.pushChapter(file, rc, volume.id!, seriesTitle, volumeTitle, volumeOrder);
+							await this.pushChapter(file, rc, volume.id!, seriesTitle, volumeTitle, volumeOrder, displayOrder);
 							result.pushed!.chapters++;
 						} else if (remoteNewer) {
-							await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder);
+							await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder, file, displayOrder);
 							result.pulled!.chapters++;
+						} else {
+							// Update title/order and rename file for non-affected chapters purely locally if needed
+							const expectedPath = this.structure.getChapterFilePath(
+								seriesTitle,
+								volumeTitle,
+								volumeOrder,
+								rc.title,
+								displayOrder
+							);
+
+							if (
+								normalizePath(lc.filePath) !== normalizePath(expectedPath) ||
+								lc.frontmatter.order !== rc.order ||
+								lc.frontmatter.title !== rc.title
+							) {
+								await this.fileManager.updateFrontmatter(file.path, {
+									title: rc.title,
+									order: rc.order,
+									last_synced: new Date().toISOString()
+								});
+
+								if (normalizePath(file.path) !== normalizePath(expectedPath)) {
+									const content = await this.app.vault.read(file);
+									await this.fileManager.writeFile(expectedPath, content);
+									await this.app.fileManager.trashFile(file);
+								}
+							}
 						}
 					}
 				} else {
-					await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder);
+					await this.pullChapter(rc.id, seriesTitle, volumeTitle, volumeOrder, undefined, displayOrder);
 					result.pulled!.chapters++;
 				}
 			} catch (error) {
@@ -362,6 +397,21 @@ export class PullSync {
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "Unknown error";
 				result.errors.push(`Failed to create chapter "${lc.frontmatter.title}": ${message}`);
+			}
+		}
+
+		// 3. Delete local chapters that are no longer on the server
+		for (const [gid, lc] of localChapterMap.entries()) {
+			if (!syncedRemoteIds.has(gid)) {
+				try {
+					const file = this.app.vault.getAbstractFileByPath(lc.filePath);
+					if (file instanceof TFile) {
+						await this.app.fileManager.trashFile(file);
+					}
+				} catch (error) {
+					const message = error instanceof Error ? error.message : "Unknown error";
+					result.errors.push(`Failed to delete local-only chapter "${lc.frontmatter.title}": ${message}`);
+				}
 			}
 		}
 	}
@@ -388,7 +438,14 @@ export class PullSync {
 	/**
 	 * Pull a single chapter by ID
 	 */
-	private async pullChapter(id: string, seriesTitle: string, volumeTitle: string, volumeOrder: number): Promise<void> {
+	public async pullChapter(
+		id: string,
+		seriesTitle: string,
+		volumeTitle: string,
+		volumeOrder: number,
+		oldFile?: TFile,
+		displayOrder?: number
+	): Promise<void> {
 		const chapter = await this.api.chapters.get(id);
 		const footnoteStyle = this.settings?.footnoteStyle;
 		const enableDropcap = this.settings?.enableDropcap;
@@ -403,7 +460,10 @@ export class PullSync {
 				seriesTitle
 			);
 		}
-		await this.fileManager.writeChapterFile(chapter, seriesTitle, volumeTitle, volumeOrder);
+		const newFilePath = await this.fileManager.writeChapterFile(chapter, seriesTitle, volumeTitle, volumeOrder, displayOrder);
+		if (oldFile && normalizePath(oldFile.path) !== normalizePath(newFilePath)) {
+			await this.app.fileManager.trashFile(oldFile);
+		}
 	}
 
 	/**
@@ -471,13 +531,14 @@ export class PullSync {
 	/**
 	 * Push local chapter changes to server
 	 */
-	private async pushChapter(
+	public async pushChapter(
 		file: TFile,
 		remoteChapter: any,
 		volumeId: string,
 		seriesTitle: string,
 		volumeTitle: string,
-		volumeOrder: number
+		volumeOrder: number,
+		displayOrder?: number
 	): Promise<void> {
 		const content = await this.app.vault.read(file);
 		const { frontmatter, content: body } = parseFrontmatter(content);
@@ -501,9 +562,15 @@ export class PullSync {
 			rawContent: body
 		});
 
-		await this.fileManager.writeChapterFile(updatedChapter, seriesTitle, volumeTitle, volumeOrder);
+		await this.fileManager.writeChapterFile(updatedChapter, seriesTitle, volumeTitle, volumeOrder, displayOrder);
 
-		const newFilePath = this.structure.getChapterFilePath(seriesTitle, volumeTitle, volumeOrder, title, order);
+		const newFilePath = this.structure.getChapterFilePath(
+			seriesTitle,
+			volumeTitle,
+			volumeOrder,
+			title,
+			displayOrder !== undefined ? displayOrder : order
+		);
 		if (normalizePath(file.path) !== normalizePath(newFilePath)) {
 			await this.app.fileManager.trashFile(file);
 		}

@@ -11,9 +11,9 @@ import type { GrimoireSyncSettings } from "../settings";
 
 export class SyncManager {
 	private api: GrimoireApi;
-	private fileManager: FileManager;
-	private structure: VaultStructure;
-	private pullSync: PullSync;
+	public fileManager: FileManager;
+	public structure: VaultStructure;
+	public pullSync: PullSync;
 	private state: SyncState;
 	private settings: GrimoireSyncSettings;
 

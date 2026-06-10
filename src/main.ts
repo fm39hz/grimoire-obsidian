@@ -3,12 +3,13 @@
  * Sync ebook content (Series, Volumes, Chapters) with Grimoire backend API
  */
 
-import { App, Menu, Modal, Notice, Plugin, Setting, TFile, TFolder } from "obsidian";
+import { App, Menu, Modal, Notice, Plugin, Setting, TFile, TFolder, normalizePath } from "obsidian";
 import { GrimoireApi } from "./api";
 import { SyncManager } from "./sync";
 import { SeriesSelectionModal, SyncStatusBar } from "./ui";
 import { DEFAULT_SETTINGS, GrimoireSyncSettings, GrimoireSyncSettingTab } from "./settings";
-import { extractOrderFromName } from "./utils";
+import { extractOrderFromName, joinPath } from "./utils";
+import type { BookTreeDto, ChapterResponse } from "./types";
 
 export default class GrimoireSyncPlugin extends Plugin {
 	settings: GrimoireSyncSettings = DEFAULT_SETTINGS;
@@ -336,36 +337,65 @@ export default class GrimoireSyncPlugin extends Plugin {
 		new Notice("Merging chapters...");
 
 		try {
-			const mergedChapter = await this.api.chapters.merge({ chapterIds });
-			new Notice("Chapters merged successfully on server!");
-
 			const referenceFile = sortedFiles[0]!.file;
 			if (referenceFile.parent && referenceFile.parent.parent) {
 				const volumeFolder = referenceFile.parent;
 				const seriesFolder = referenceFile.parent.parent;
-				
-				const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
-				const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
-				const seriesTitle = seriesFolder.name;
 
-				const contentResponse = await this.api.chapters.getContent(
-					mergedChapter.id!,
-					"markdown",
-					this.settings.footnoteStyle,
-					this.settings.enableDropcap
-				);
-				if (contentResponse?.data) {
-					mergedChapter.markdown = contentResponse.data;
+				const volumeMetadataPath = normalizePath(joinPath(volumeFolder.path, "_volume.md"));
+				const volumeMetadataFile = this.app.vault.getAbstractFileByPath(volumeMetadataPath);
+				if (volumeMetadataFile instanceof TFile) {
+					const volCache = this.app.metadataCache.getFileCache(volumeMetadataFile);
+					const volumeIdPrefixed = volCache?.frontmatter?.["grimoire_id"];
+					if (volumeIdPrefixed) {
+						const volumeId = String(volumeIdPrefixed);
+						const seriesTitle = seriesFolder.name;
+						const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
+						const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
+
+						new Notice("Saving local changes to server...");
+						for (const sf of sortedFiles) {
+							const displayOrder = extractOrderFromName(sf.file.basename) ?? 0;
+							await this.syncManager.pullSync.pushChapter(
+								sf.file,
+								{ id: sf.grimoireId },
+								volumeId,
+								seriesTitle,
+								volumeTitle,
+								volumeOrder,
+								displayOrder
+							);
+						}
+
+						const mergedChapter = await this.api.chapters.merge({ chapterIds });
+						new Notice("Chapters merged successfully on server!");
+
+						// Fetch full markdown content for the merged chapter
+						const contentResponse = await this.api.chapters.getContent(
+							mergedChapter.id!,
+							"markdown",
+							this.settings.footnoteStyle,
+							this.settings.enableDropcap
+						);
+						mergedChapter.markdown = contentResponse?.data ?? "";
+
+						// Trash the old files first
+						for (const sf of sortedFiles) {
+							const oldFile = this.app.vault.getAbstractFileByPath(sf.file.path);
+							if (oldFile instanceof TFile) {
+								await this.app.fileManager.trashFile(oldFile);
+							}
+						}
+
+						// Write the merged chapter file with its float order temporarily
+						await this.syncManager.fileManager.writeChapterFile(mergedChapter, seriesTitle, volumeTitle, volumeOrder, mergedChapter.order);
+
+						// Reindex the volume folder locally
+						await this.reindexVolumeFiles(volumeFolder);
+
+						new Notice(`Merged successfully!`);
+					}
 				}
-
-				const fileManager = (this.syncManager as any).fileManager;
-				await fileManager.writeChapterFile(mergedChapter, seriesTitle, volumeTitle, volumeOrder);
-
-				for (const f of sortedFiles) {
-					await this.app.fileManager.trashFile(f.file);
-				}
-
-				new Notice(`Created merged chapter: ${mergedChapter.title}`);
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "Unknown error";
@@ -389,43 +419,81 @@ export default class GrimoireSyncPlugin extends Plugin {
 		const fileContent = await this.app.vault.read(file);
 		const segmentIndex = this.getSegmentIndexAtCursor(fileContent, cursorLine);
 
-		const defaultTitle = `${file.basename} (Part 2)`;
+		let defaultTitle = this.getSegmentTextAtCursor(fileContent, cursorLine);
+		// Clean up markdown heading prefix
+		defaultTitle = defaultTitle.replace(/^#+\s+/, "");
+		// Truncate to a reasonable length if too long
+		if (defaultTitle.length > 100) {
+			defaultTitle = defaultTitle.substring(0, 100) + "...";
+		}
+		if (!defaultTitle) {
+			defaultTitle = `${file.basename} (Part 2)`;
+		}
 
 		const modal = new ChapterTitleModal(this.app, defaultTitle, async (newTitle) => {
 			new Notice("Splitting chapter...");
 			try {
-				const resultChapters = await this.api!.chapters.split(chapterId, {
-					splitPoints: [{ segmentIndex, newChapterTitle: newTitle }]
-				});
-
-				new Notice("Chapter split successfully on server!");
-
 				if (file.parent && file.parent.parent) {
 					const volumeFolder = file.parent;
 					const seriesFolder = file.parent.parent;
-					
-					const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
-					const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
-					const seriesTitle = seriesFolder.name;
 
-					const fileManager = (this.syncManager as any).fileManager;
+					const volumeMetadataPath = normalizePath(joinPath(volumeFolder.path, "_volume.md"));
+					const volumeMetadataFile = this.app.vault.getAbstractFileByPath(volumeMetadataPath);
+					if (volumeMetadataFile instanceof TFile) {
+						const volCache = this.app.metadataCache.getFileCache(volumeMetadataFile);
+						const volumeIdPrefixed = volCache?.frontmatter?.["grimoire_id"];
+						if (volumeIdPrefixed) {
+							const volumeId = String(volumeIdPrefixed);
+							const seriesTitle = seriesFolder.name;
+							const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
+							const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
+							const displayOrder = extractOrderFromName(file.basename) ?? 0;
 
-					for (const ch of resultChapters) {
-						const contentResponse = await this.api!.chapters.getContent(
-							ch.id!,
-							"markdown",
-							this.settings.footnoteStyle,
-							this.settings.enableDropcap
-						);
-						if (contentResponse?.data) {
-							ch.markdown = contentResponse.data;
+							new Notice("Saving local changes to server...");
+							await this.syncManager!.pullSync.pushChapter(
+								file,
+								{ id: chapterId },
+								volumeId,
+								seriesTitle,
+								volumeTitle,
+								volumeOrder,
+								displayOrder
+							);
+
+							const resultChapters = await this.api!.chapters.split(chapterId, {
+								splitPoints: [{ segmentIndex, newChapterTitle: newTitle }]
+							});
+
+							new Notice("Chapter split successfully on server!");
+
+							// Trash the old original file first to prevent duplicate filename issues
+							const oldFile = this.app.vault.getAbstractFileByPath(file.path);
+							if (oldFile instanceof TFile) {
+								await this.app.fileManager.trashFile(oldFile);
+							}
+
+							// Fetch full markdown content and write the newly split chapters (original + new ones)
+							for (const rc of resultChapters) {
+								if (!rc.id) continue;
+								const contentResponse = await this.api!.chapters.getContent(
+									rc.id,
+									"markdown",
+									this.settings.footnoteStyle,
+									this.settings.enableDropcap
+								);
+								rc.markdown = contentResponse?.data ?? "";
+
+								// Write chapter file temporarily using float order
+								await this.syncManager!.fileManager.writeChapterFile(rc, seriesTitle, volumeTitle, volumeOrder, rc.order);
+							}
+
+							// Reindex the volume folder locally
+							new Notice("Reindexing prefixes...");
+							await this.reindexVolumeFiles(volumeFolder);
+
+							new Notice("Split into chapters successfully!");
 						}
-						await fileManager.writeChapterFile(ch, seriesTitle, volumeTitle, volumeOrder);
 					}
-
-					await this.app.fileManager.trashFile(file);
-
-					new Notice("Split into chapters successfully!");
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "Unknown error";
@@ -433,6 +501,36 @@ export default class GrimoireSyncPlugin extends Plugin {
 			}
 		});
 		modal.open();
+	}
+
+	private getSegmentTextAtCursor(markdown: string, cursorLine: number): string {
+		const normalized = markdown.replace(/\r\n/g, "\n");
+		const lines = normalized.split("\n");
+		let frontmatterLineCount = 0;
+		if (normalized.startsWith("---")) {
+			const nextSeparator = lines.indexOf("---", 1);
+			if (nextSeparator !== -1) {
+				frontmatterLineCount = nextSeparator + 1;
+			}
+		}
+
+		const bodyLineIndex = cursorLine - frontmatterLineCount;
+		if (bodyLineIndex < 0) return "";
+
+		const bodyLines = lines.slice(frontmatterLineCount);
+		
+		// Find the start and end of the block containing bodyLineIndex
+		let start = bodyLineIndex;
+		while (start > 0 && (bodyLines[start - 1]?.trim() ?? "") !== "") {
+			start--;
+		}
+		let end = bodyLineIndex;
+		while (end < bodyLines.length - 1 && (bodyLines[end + 1]?.trim() ?? "") !== "") {
+			end++;
+		}
+
+		const blockLines = bodyLines.slice(start, end + 1);
+		return blockLines.join(" ").trim();
 	}
 
 	private getSegmentIndexAtCursor(markdown: string, cursorLine: number): number {
@@ -504,6 +602,57 @@ export default class GrimoireSyncPlugin extends Plugin {
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "Unknown error";
 				new Notice(`Failed to upload ${file.name}: ${message}`);
+			}
+		}
+	}
+
+	private async reindexVolumeFiles(volumeFolder: TFolder): Promise<void> {
+		if (!this.syncManager) return;
+
+		const fileManager = this.syncManager.fileManager;
+		const localChapters = await this.syncManager.structure.findChaptersInVolume(volumeFolder.path);
+
+		// Sort local chapters by their frontmatter order ascending
+		const sortedChapters = [...localChapters].sort((a, b) => {
+			const orderA = Number(a.frontmatter.order) || 0;
+			const orderB = Number(b.frontmatter.order) || 0;
+			return orderA - orderB;
+		});
+
+		const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
+		const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
+		const seriesFolder = volumeFolder.parent;
+		if (!seriesFolder) return;
+		const seriesTitle = seriesFolder.name;
+
+		// Rename files to have consecutive integer prefixes
+		for (let i = 0; i < sortedChapters.length; i++) {
+			const lc = sortedChapters[i]!;
+			const displayOrder = i + 1;
+			const expectedPath = this.syncManager.structure.getChapterFilePath(
+				seriesTitle,
+				volumeTitle,
+				volumeOrder,
+				lc.frontmatter.title || "",
+				displayOrder
+			);
+
+			const file = this.app.vault.getAbstractFileByPath(lc.filePath);
+			if (file instanceof TFile) {
+				const currentOrder = Number(lc.frontmatter.order) || 0;
+				const currentTitle = lc.frontmatter.title || "";
+
+				await fileManager.updateFrontmatter(file.path, {
+					order: currentOrder,
+					title: currentTitle,
+					last_synced: new Date().toISOString()
+				});
+
+				if (normalizePath(file.path) !== normalizePath(expectedPath)) {
+					const content = await this.app.vault.read(file);
+					await fileManager.writeFile(expectedPath, content);
+					await this.app.fileManager.trashFile(file);
+				}
 			}
 		}
 	}
