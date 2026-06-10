@@ -17,4 +17,7 @@ export {
 	createSeriesFrontmatter,
 	createVolumeFrontmatter,
 	createChapterFrontmatter,
+	mapSeriesFrontmatter,
+	mapVolumeFrontmatter,
+	mapChapterFrontmatter,
 } from "./frontmatter";

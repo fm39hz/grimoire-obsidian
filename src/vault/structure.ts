@@ -4,9 +4,16 @@
  */
 
 import { App, TFolder, TFile, Vault, normalizePath } from "obsidian";
-import { SERIES_METADATA_FILE, VOLUME_METADATA_FILE, MARKDOWN_EXTENSION } from "../utils";
+import { SERIES_METADATA_FILE, VOLUME_METADATA_FILE, MARKDOWN_EXTENSION, FRONTMATTER_KEYS } from "../utils";
 import { sanitizeFileName, createOrderedName, joinPath } from "../utils";
-import { parseSeriesFrontmatter, parseVolumeFrontmatter, parseChapterFrontmatter } from "./frontmatter";
+import {
+	parseSeriesFrontmatter,
+	parseVolumeFrontmatter,
+	parseChapterFrontmatter,
+	mapSeriesFrontmatter,
+	mapVolumeFrontmatter,
+	mapChapterFrontmatter
+} from "./frontmatter";
 import type { SeriesFrontmatter, VolumeFrontmatter, ChapterFrontmatter } from "../types";
 
 /**
@@ -167,6 +174,39 @@ export class VaultStructure {
 	/**
 	 * Find all series in the sync folder
 	 */
+	private async getSeriesFrontmatter(file: TFile): Promise<SeriesFrontmatter | null> {
+		const cache = this.app.metadataCache.getFileCache(file);
+		let fm = mapSeriesFrontmatter(cache?.frontmatter);
+		if (!fm) {
+			const content = await this.app.vault.read(file);
+			fm = parseSeriesFrontmatter(content);
+		}
+		return fm;
+	}
+
+	private async getVolumeFrontmatter(file: TFile): Promise<VolumeFrontmatter | null> {
+		const cache = this.app.metadataCache.getFileCache(file);
+		let fm = mapVolumeFrontmatter(cache?.frontmatter);
+		if (!fm) {
+			const content = await this.app.vault.read(file);
+			fm = parseVolumeFrontmatter(content);
+		}
+		return fm;
+	}
+
+	private async getChapterFrontmatter(file: TFile): Promise<ChapterFrontmatter | null> {
+		const cache = this.app.metadataCache.getFileCache(file);
+		let fm = mapChapterFrontmatter(cache?.frontmatter);
+		if (!fm) {
+			const content = await this.app.vault.read(file);
+			fm = parseChapterFrontmatter(content);
+		}
+		return fm;
+	}
+
+	/**
+	 * Find all series in the sync folder
+	 */
 	async findAllSeries(): Promise<VaultSeries[]> {
 		const syncPath = this.getSyncFolderPath();
 		const syncFolder = this.app.vault.getAbstractFileByPath(syncPath);
@@ -183,8 +223,7 @@ export class VaultStructure {
 				const metadataFile = this.app.vault.getAbstractFileByPath(metadataPath);
 
 				if (metadataFile instanceof TFile) {
-					const content = await this.app.vault.read(metadataFile);
-					const frontmatter = parseSeriesFrontmatter(content);
+					const frontmatter = await this.getSeriesFrontmatter(metadataFile);
 
 					if (frontmatter) {
 						series.push({
@@ -218,8 +257,7 @@ export class VaultStructure {
 				const metadataFile = this.app.vault.getAbstractFileByPath(metadataPath);
 
 				if (metadataFile instanceof TFile) {
-					const content = await this.app.vault.read(metadataFile);
-					const frontmatter = parseVolumeFrontmatter(content);
+					const frontmatter = await this.getVolumeFrontmatter(metadataFile);
 
 					if (frontmatter) {
 						volumes.push({
@@ -252,8 +290,7 @@ export class VaultStructure {
 
 		for (const child of volumeFolder.children) {
 			if (child instanceof TFile && child.extension === "md" && child.name !== VOLUME_METADATA_FILE) {
-				const content = await this.app.vault.read(child);
-				const frontmatter = parseChapterFrontmatter(content);
+				const frontmatter = await this.getChapterFrontmatter(child);
 
 				if (frontmatter) {
 					chapters.push({

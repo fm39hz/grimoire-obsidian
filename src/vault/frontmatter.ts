@@ -200,10 +200,9 @@ export function getEntityType(content: string): GrimoireEntityType | null {
 }
 
 /**
- * Parse frontmatter as SeriesFrontmatter
+ * Map raw frontmatter record to SeriesFrontmatter
  */
-export function parseSeriesFrontmatter(content: string): SeriesFrontmatter | null {
-	const { frontmatter } = parseFrontmatter(content);
+export function mapSeriesFrontmatter(frontmatter: Record<string, unknown> | null | undefined): SeriesFrontmatter | null {
 	if (!frontmatter || frontmatter[FRONTMATTER_KEYS.TYPE] !== "series") {
 		return null;
 	}
@@ -221,10 +220,9 @@ export function parseSeriesFrontmatter(content: string): SeriesFrontmatter | nul
 }
 
 /**
- * Parse frontmatter as VolumeFrontmatter
+ * Map raw frontmatter record to VolumeFrontmatter
  */
-export function parseVolumeFrontmatter(content: string): VolumeFrontmatter | null {
-	const { frontmatter } = parseFrontmatter(content);
+export function mapVolumeFrontmatter(frontmatter: Record<string, unknown> | null | undefined): VolumeFrontmatter | null {
 	if (!frontmatter || frontmatter[FRONTMATTER_KEYS.TYPE] !== "volume") {
 		return null;
 	}
@@ -243,10 +241,9 @@ export function parseVolumeFrontmatter(content: string): VolumeFrontmatter | nul
 }
 
 /**
- * Parse frontmatter as ChapterFrontmatter
+ * Map raw frontmatter record to ChapterFrontmatter
  */
-export function parseChapterFrontmatter(content: string): ChapterFrontmatter | null {
-	const { frontmatter } = parseFrontmatter(content);
+export function mapChapterFrontmatter(frontmatter: Record<string, unknown> | null | undefined): ChapterFrontmatter | null {
 	if (!frontmatter || frontmatter[FRONTMATTER_KEYS.TYPE] !== "chapter") {
 		return null;
 	}
@@ -259,6 +256,30 @@ export function parseChapterFrontmatter(content: string): ChapterFrontmatter | n
 		volume_id: String(frontmatter[FRONTMATTER_KEYS.VOLUME_ID] || ""),
 		order: Number(frontmatter[FRONTMATTER_KEYS.ORDER]) || 0,
 	};
+}
+
+/**
+ * Parse frontmatter as SeriesFrontmatter
+ */
+export function parseSeriesFrontmatter(content: string): SeriesFrontmatter | null {
+	const { frontmatter } = parseFrontmatter(content);
+	return mapSeriesFrontmatter(frontmatter);
+}
+
+/**
+ * Parse frontmatter as VolumeFrontmatter
+ */
+export function parseVolumeFrontmatter(content: string): VolumeFrontmatter | null {
+	const { frontmatter } = parseFrontmatter(content);
+	return mapVolumeFrontmatter(frontmatter);
+}
+
+/**
+ * Parse frontmatter as ChapterFrontmatter
+ */
+export function parseChapterFrontmatter(content: string): ChapterFrontmatter | null {
+	const { frontmatter } = parseFrontmatter(content);
+	return mapChapterFrontmatter(frontmatter);
 }
 
 function formatLink(

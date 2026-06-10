@@ -59,6 +59,9 @@ export class PullSync {
 		try {
 			await this.structure.ensureSyncFolder();
 
+			// Resolve local folder restructuring first
+			await this.resolveLocalRestructuring();
+
 			onProgress?.({
 				phase: "series",
 				current: 0,
@@ -158,6 +161,9 @@ export class PullSync {
 		};
 
 		try {
+			// Resolve local folder restructuring first
+			await this.resolveLocalRestructuring();
+
 			const remote = await this.api.series.get(seriesId);
 			if (!remote.id || !remote.title) {
 				throw new Error("Invalid series data");
@@ -622,5 +628,58 @@ export class PullSync {
 	private extractCoverFilename(assetPath: string): string {
 		const parts = assetPath.replace(/\\/g, "/").split("/");
 		return parts[parts.length - 1] || "cover.jpg";
+	}
+
+	/**
+	 * Detect and resolve local folder restructuring (moved volumes or chapters)
+	 * by updating parent-child relationships on the server and local frontmatter.
+	 */
+	private async resolveLocalRestructuring(): Promise<void> {
+		if (this.settings?.includeFrontmatter === false) {
+			return;
+		}
+
+		const localSeriesList = await this.structure.findAllSeries();
+
+		for (const ls of localSeriesList) {
+			const seriesId = ls.frontmatter.grimoire_id;
+			if (!seriesId) continue;
+
+			// Check volumes in this series folder
+			const localVolumes = await this.structure.findVolumesInSeries(ls.folderPath);
+			for (const lv of localVolumes) {
+				const volumeId = lv.frontmatter.grimoire_id;
+				if (!volumeId) continue;
+
+				// 1. If the volume's logically stored series_id doesn't match its physical parent seriesId, it has been moved
+				if (lv.frontmatter.series_id !== seriesId) {
+					try {
+						await this.api.volumes.update(volumeId, { seriesId });
+						await this.fileManager.updateFrontmatter(lv.metadataPath, { series_id: seriesId });
+						lv.frontmatter.series_id = seriesId;
+					} catch (error) {
+						console.error(`Failed to update series parent for volume ${volumeId}:`, error);
+					}
+				}
+
+				// Check chapters in this volume folder
+				const localChapters = await this.structure.findChaptersInVolume(lv.folderPath);
+				for (const lc of localChapters) {
+					const chapterId = lc.frontmatter.grimoire_id;
+					if (!chapterId) continue;
+
+					// 2. If the chapter's logically stored volume_id doesn't match its physical parent volumeId, it has been moved
+					if (lc.frontmatter.volume_id !== volumeId) {
+						try {
+							await this.api.chapters.update(chapterId, { volumeId });
+							await this.fileManager.updateFrontmatter(lc.filePath, { volume_id: volumeId });
+							lc.frontmatter.volume_id = volumeId;
+						} catch (error) {
+							console.error(`Failed to update volume parent for chapter ${chapterId}:`, error);
+						}
+					}
+				}
+			}
+		}
 	}
 }

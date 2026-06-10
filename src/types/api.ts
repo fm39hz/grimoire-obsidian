@@ -126,6 +126,7 @@ export interface UpdateVolumeRequest {
 	order?: number | null;
 	title?: string | null;
 	metadata?: VolumeMetadata | null;
+	seriesId?: string | null;
 }
 
 // ============================================================================
@@ -166,6 +167,7 @@ export interface UpdateChapterRequest {
 	title?: string | null;
 	content?: Segment[] | null;
 	footnotes?: FootnoteSegment[] | null;
+	volumeId?: string | null;
 }
 
 export interface ImportFootnote {
