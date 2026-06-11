@@ -472,8 +472,9 @@ export default class GrimoireSyncPlugin extends Plugin {
 						const mergedChapter = await this.api.chapters.merge({ chapterIds });
 						new Notice("Chapters merged successfully on server!");
 
-						// Trash the old files first
+						// Trash the old files first (mark as programmatic to skip server delete)
 						for (const sf of sortedFiles) {
+							this.syncManager.fileManager.programmaticWrites.add(sf.file.path);
 							const oldFile = this.app.vault.getAbstractFileByPath(sf.file.path);
 							if (oldFile instanceof TFile) {
 								await this.app.fileManager.trashFile(oldFile);
@@ -568,6 +569,8 @@ export default class GrimoireSyncPlugin extends Plugin {
 							new Notice("Chapter split successfully on server!");
 
 							// Trash the old original file first to prevent duplicate filename issues
+							// Mark as programmatic so handleFileDelete doesn't cascade a server delete
+							this.syncManager!.fileManager.programmaticWrites.add(file.path);
 							const oldFile = this.app.vault.getAbstractFileByPath(file.path);
 							if (oldFile instanceof TFile) {
 								await this.app.fileManager.trashFile(oldFile);
