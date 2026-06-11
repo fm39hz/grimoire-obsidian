@@ -142,7 +142,7 @@ export class VaultStructure {
 		chapterOrder: number
 	): string {
 		const volumePath = this.getVolumeFolderPath(seriesTitle, volumeTitle, volumeOrder);
-		const chapterFileName = createOrderedName(chapterTitle, chapterOrder) + MARKDOWN_EXTENSION;
+		const chapterFileName = sanitizeFileName(chapterTitle) + MARKDOWN_EXTENSION;
 		return normalizePath(joinPath(volumePath, chapterFileName));
 	}
 

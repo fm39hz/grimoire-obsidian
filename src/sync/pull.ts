@@ -538,7 +538,8 @@ export class PullSync {
 		seriesTitle: string,
 		volumeTitle: string,
 		volumeOrder: number,
-		displayOrder?: number
+		displayOrder?: number,
+		skipWrite?: boolean
 	): Promise<void> {
 		const content = await this.app.vault.read(file);
 		const { frontmatter, content: body } = parseFrontmatter(content);
@@ -562,17 +563,19 @@ export class PullSync {
 			rawContent: body
 		});
 
-		await this.fileManager.writeChapterFile(updatedChapter, seriesTitle, volumeTitle, volumeOrder, displayOrder);
+		if (!skipWrite) {
+			await this.fileManager.writeChapterFile(updatedChapter, seriesTitle, volumeTitle, volumeOrder, displayOrder);
 
-		const newFilePath = this.structure.getChapterFilePath(
-			seriesTitle,
-			volumeTitle,
-			volumeOrder,
-			title,
-			displayOrder !== undefined ? displayOrder : order
-		);
-		if (normalizePath(file.path) !== normalizePath(newFilePath)) {
-			await this.app.fileManager.trashFile(file);
+			const newFilePath = this.structure.getChapterFilePath(
+				seriesTitle,
+				volumeTitle,
+				volumeOrder,
+				title,
+				displayOrder !== undefined ? displayOrder : order
+			);
+			if (normalizePath(file.path) !== normalizePath(newFilePath)) {
+				await this.app.fileManager.trashFile(file);
+			}
 		}
 	}
 
@@ -589,7 +592,7 @@ export class PullSync {
 	/**
 	 * Helper to check if file was modified locally since last sync
 	 */
-	private isLocallyModified(file: TFile): boolean {
+	public isLocallyModified(file: TFile): boolean {
 		const lastSynced = this.getLocalLastSynced(file);
 		if (lastSynced === 0) return true;
 		return file.stat.mtime > lastSynced + 5000;

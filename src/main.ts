@@ -3,26 +3,36 @@
  * Sync ebook content (Series, Volumes, Chapters) with Grimoire backend API
  */
 
-import { App, Menu, Modal, Notice, Plugin, Setting, TFile, TFolder, normalizePath } from "obsidian";
+import { App, Menu, Modal, Notice, Plugin, Setting, TFile, TFolder, normalizePath, Workspace } from "obsidian";
 import { GrimoireApi } from "./api";
 import { SyncManager } from "./sync";
-import { SeriesSelectionModal, SyncStatusBar } from "./ui";
+import { SeriesSelectionModal, SyncStatusBar, GrimoireTreeView, GRIMOIRE_TREE_VIEW } from "./ui";
 import { DEFAULT_SETTINGS, GrimoireSyncSettings, GrimoireSyncSettingTab } from "./settings";
 import { extractOrderFromName, joinPath } from "./utils";
 import type { BookTreeDto, ChapterResponse } from "./types";
 
 export default class GrimoireSyncPlugin extends Plugin {
 	settings: GrimoireSyncSettings = DEFAULT_SETTINGS;
-	private api: GrimoireApi | null = null;
-	private syncManager: SyncManager | null = null;
+	public api: GrimoireApi | null = null;
+	public syncManager: SyncManager | null = null;
 	private statusBar: SyncStatusBar | null = null;
 	private autoSyncIntervalId: number | null = null;
+	private originalGetLeavesOfType: any = null;
 
 	async onload() {
 		await this.loadSettings();
 
 		// Initialize API client if configured
 		this.initializeApi();
+
+		// Register Grimoire Tree View
+		this.registerView(GRIMOIRE_TREE_VIEW, (leaf) => new GrimoireTreeView(leaf, this));
+
+		// Patch Workspace.prototype.getLeavesOfType
+		this.patchWorkspaceLeaves();
+
+		// Add Ribbon Icon to toggle Book Tree
+		this.addRibbonIcon("folder-tree", "Open Grimoire Book Tree", () => this.initBookTreeView());
 
 		// Add status bar item
 		const statusBarEl = this.addStatusBarItem();
@@ -43,6 +53,9 @@ export default class GrimoireSyncPlugin extends Plugin {
 				this.pullAll();
 			}
 			this.startAutoSyncTimer();
+
+			// Replace standard file-explorer leaf with Grimoire Tree View
+			this.replaceFileExplorerLeafs();
 		});
 
 		console.log("Grimoire Sync plugin loaded");
@@ -50,7 +63,64 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 	onunload() {
 		this.stopAutoSyncTimer();
+
+		// Restore Workspace.prototype.getLeavesOfType
+		if (this.originalGetLeavesOfType) {
+			Workspace.prototype.getLeavesOfType = this.originalGetLeavesOfType;
+		}
+
+		// Restore standard file-explorer leaves
+		this.restoreFileExplorerLeafs();
+
 		console.log("Grimoire Sync plugin unloaded");
+	}
+
+	async initBookTreeView() {
+		let leaf = this.app.workspace.getLeavesOfType(GRIMOIRE_TREE_VIEW)[0];
+		if (!leaf) {
+			const leftLeaf = this.app.workspace.getLeftLeaf(false);
+			if (leftLeaf) {
+				leaf = leftLeaf;
+				await leaf.setViewState({ type: GRIMOIRE_TREE_VIEW, active: true });
+			}
+		}
+		if (leaf) {
+			this.app.workspace.revealLeaf(leaf);
+		}
+	}
+
+	private patchWorkspaceLeaves() {
+		const original = Workspace.prototype.getLeavesOfType;
+		this.originalGetLeavesOfType = original;
+		const self = this;
+		Workspace.prototype.getLeavesOfType = function (type: string) {
+			if (type === "file-explorer") {
+				return original.call(this, GRIMOIRE_TREE_VIEW);
+			}
+			return original.call(this, type);
+		};
+	}
+
+	private replaceFileExplorerLeafs() {
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (leaf.view && leaf.view.getViewType() === "file-explorer") {
+				leaf.setViewState({
+					type: GRIMOIRE_TREE_VIEW,
+					active: true
+				});
+			}
+		});
+	}
+
+	private restoreFileExplorerLeafs() {
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (leaf.view && leaf.view.getViewType() === GRIMOIRE_TREE_VIEW) {
+				leaf.setViewState({
+					type: "file-explorer",
+					active: true
+				});
+			}
+		});
 	}
 
 	/**
@@ -89,6 +159,13 @@ export default class GrimoireSyncPlugin extends Plugin {
 			id: "push-staged-epubs",
 			name: "Push EPUB files from stagings folder",
 			callback: () => this.pushStagedEpubs(),
+		});
+
+		// Open book tree view
+		this.addCommand({
+			id: "open-book-tree",
+			name: "Open Grimoire Book Tree",
+			callback: () => this.initBookTreeView(),
 		});
 	}
 
@@ -353,31 +430,26 @@ export default class GrimoireSyncPlugin extends Plugin {
 						const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
 						const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
 
-						new Notice("Saving local changes to server...");
+						// Save local changes to server only if they are modified
 						for (const sf of sortedFiles) {
-							const displayOrder = extractOrderFromName(sf.file.basename) ?? 0;
-							await this.syncManager.pullSync.pushChapter(
-								sf.file,
-								{ id: sf.grimoireId },
-								volumeId,
-								seriesTitle,
-								volumeTitle,
-								volumeOrder,
-								displayOrder
-							);
+							if (this.syncManager.pullSync.isLocallyModified(sf.file)) {
+								new Notice(`Saving local changes for ${sf.file.name}...`);
+								const displayOrder = extractOrderFromName(sf.file.basename) ?? 0;
+								await this.syncManager.pullSync.pushChapter(
+									sf.file,
+									{ id: sf.grimoireId, title: sf.file.basename, order: sf.order },
+									volumeId,
+									seriesTitle,
+									volumeTitle,
+									volumeOrder,
+									displayOrder,
+									true // skipWrite
+								);
+							}
 						}
 
 						const mergedChapter = await this.api.chapters.merge({ chapterIds });
 						new Notice("Chapters merged successfully on server!");
-
-						// Fetch full markdown content for the merged chapter
-						const contentResponse = await this.api.chapters.getContent(
-							mergedChapter.id!,
-							"markdown",
-							this.settings.footnoteStyle,
-							this.settings.enableDropcap
-						);
-						mergedChapter.markdown = contentResponse?.data ?? "";
 
 						// Trash the old files first
 						for (const sf of sortedFiles) {
@@ -387,11 +459,11 @@ export default class GrimoireSyncPlugin extends Plugin {
 							}
 						}
 
-						// Write the merged chapter file with its float order temporarily
+						// Write the merged chapter file using returned markdown content directly
 						await this.syncManager.fileManager.writeChapterFile(mergedChapter, seriesTitle, volumeTitle, volumeOrder, mergedChapter.order);
 
-						// Reindex the volume folder locally
-						await this.reindexVolumeFiles(volumeFolder);
+						// Refresh the Grimoire tree view
+						this.refreshBookTreeView();
 
 						new Notice(`Merged successfully!`);
 					}
@@ -449,16 +521,24 @@ export default class GrimoireSyncPlugin extends Plugin {
 							const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
 							const displayOrder = extractOrderFromName(file.basename) ?? 0;
 
-							new Notice("Saving local changes to server...");
-							await this.syncManager!.pullSync.pushChapter(
-								file,
-								{ id: chapterId },
-								volumeId,
-								seriesTitle,
-								volumeTitle,
-								volumeOrder,
-								displayOrder
-							);
+							// Save local changes to server only if modified
+							if (this.syncManager!.pullSync.isLocallyModified(file)) {
+								new Notice("Saving local changes to server...");
+								await this.syncManager!.pullSync.pushChapter(
+									file,
+									{
+										id: chapterId,
+										title: cache?.frontmatter?.["title"] || file.basename,
+										order: Number(cache?.frontmatter?.["order"]) || 0
+									},
+									volumeId,
+									seriesTitle,
+									volumeTitle,
+									volumeOrder,
+									displayOrder,
+									true // skipWrite
+								);
+							}
 
 							const resultChapters = await this.api!.chapters.split(chapterId, {
 								splitPoints: [{ segmentIndex, newChapterTitle: newTitle }]
@@ -472,24 +552,14 @@ export default class GrimoireSyncPlugin extends Plugin {
 								await this.app.fileManager.trashFile(oldFile);
 							}
 
-							// Fetch full markdown content and write the newly split chapters (original + new ones)
+							// Write the newly split chapters (original + new ones) using returned markdown content directly
 							for (const rc of resultChapters) {
 								if (!rc.id) continue;
-								const contentResponse = await this.api!.chapters.getContent(
-									rc.id,
-									"markdown",
-									this.settings.footnoteStyle,
-									this.settings.enableDropcap
-								);
-								rc.markdown = contentResponse?.data ?? "";
-
-								// Write chapter file temporarily using float order
 								await this.syncManager!.fileManager.writeChapterFile(rc, seriesTitle, volumeTitle, volumeOrder, rc.order);
 							}
 
-							// Reindex the volume folder locally
-							new Notice("Reindexing prefixes...");
-							await this.reindexVolumeFiles(volumeFolder);
+							// Refresh the Grimoire tree view
+							this.refreshBookTreeView();
 
 							new Notice("Split into chapters successfully!");
 						}
@@ -606,53 +676,11 @@ export default class GrimoireSyncPlugin extends Plugin {
 		}
 	}
 
-	private async reindexVolumeFiles(volumeFolder: TFolder): Promise<void> {
-		if (!this.syncManager) return;
-
-		const fileManager = this.syncManager.fileManager;
-		const localChapters = await this.syncManager.structure.findChaptersInVolume(volumeFolder.path);
-
-		// Sort local chapters by their frontmatter order ascending
-		const sortedChapters = [...localChapters].sort((a, b) => {
-			const orderA = Number(a.frontmatter.order) || 0;
-			const orderB = Number(b.frontmatter.order) || 0;
-			return orderA - orderB;
-		});
-
-		const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
-		const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
-		const seriesFolder = volumeFolder.parent;
-		if (!seriesFolder) return;
-		const seriesTitle = seriesFolder.name;
-
-		// Rename files to have consecutive integer prefixes
-		for (let i = 0; i < sortedChapters.length; i++) {
-			const lc = sortedChapters[i]!;
-			const displayOrder = i + 1;
-			const expectedPath = this.syncManager.structure.getChapterFilePath(
-				seriesTitle,
-				volumeTitle,
-				volumeOrder,
-				lc.frontmatter.title || "",
-				displayOrder
-			);
-
-			const file = this.app.vault.getAbstractFileByPath(lc.filePath);
-			if (file instanceof TFile) {
-				const currentOrder = Number(lc.frontmatter.order) || 0;
-				const currentTitle = lc.frontmatter.title || "";
-
-				await fileManager.updateFrontmatter(file.path, {
-					order: currentOrder,
-					title: currentTitle,
-					last_synced: new Date().toISOString()
-				});
-
-				if (normalizePath(file.path) !== normalizePath(expectedPath)) {
-					const content = await this.app.vault.read(file);
-					await fileManager.writeFile(expectedPath, content);
-					await this.app.fileManager.trashFile(file);
-				}
+	refreshBookTreeView() {
+		const leaves = this.app.workspace.getLeavesOfType(GRIMOIRE_TREE_VIEW);
+		for (const leaf of leaves) {
+			if (leaf.view instanceof GrimoireTreeView) {
+				leaf.view.refreshView();
 			}
 		}
 	}

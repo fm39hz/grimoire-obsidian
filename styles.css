@@ -101,3 +101,22 @@
 		opacity: 0.5;
 	}
 }
+
+/* Grimoire Tree View Status Dots */
+.grimoire-status-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	display: inline-block;
+	flex-shrink: 0;
+	margin-right: 6px;
+	align-self: center;
+}
+
+.grimoire-status-dot.status-modified {
+	background-color: var(--text-accent, #f59e0b);
+}
+
+.grimoire-status-dot.status-synced {
+	background-color: var(--text-success, #10b981);
+}

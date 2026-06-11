@@ -259,10 +259,10 @@ export interface JobResponse {
 // ============================================================================
 
 export enum BookTreeNodeType {
-	BookShelf = 0,
-	Series = 1,
-	Volume = 2,
-	Chapter = 3,
+	BookShelf = "bookshelf",
+	Series = "series",
+	Volume = "volume",
+	Chapter = "chapter",
 }
 
 export interface BookTreeNodeDto {
