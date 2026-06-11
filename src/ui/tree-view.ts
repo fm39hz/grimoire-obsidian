@@ -189,7 +189,7 @@ export class GrimoireTreeView extends ItemView {
 		titleEl.setAttribute("data-path", folder.path);
 		
 		// Collapse indicator
-		const iconEl = titleEl.createDiv({ cls: "tree-item-icon nav-folder-collapse-indicator collapse-icon" });
+		const iconEl = titleEl.createDiv({ cls: `tree-item-icon nav-folder-collapse-indicator collapse-icon${isExpanded ? "" : " is-collapsed"}` });
 		setIcon(iconEl, "right-triangle");
 
 		titleEl.createDiv({ cls: "tree-item-inner nav-folder-title-content", text: meta.title });
