@@ -2,7 +2,7 @@
  * File manager for creating and updating vault files
  */
 
-import { App, TFile, normalizePath } from "obsidian";
+import { App, TFile, TFolder, normalizePath } from "obsidian";
 import {
 	createMarkdownWithFrontmatter,
 	createSeriesFrontmatter,
@@ -23,6 +23,8 @@ import type { GrimoireApi } from "../api";
 import type { GrimoireSyncSettings } from "../settings";
 
 export class FileManager {
+	public programmaticWrites: Set<string> = new Set();
+
 	constructor(
 		private app: App,
 		private structure: VaultStructure,
@@ -38,6 +40,8 @@ export class FileManager {
 			throw new Error("Series must have id and title");
 		}
 
+		const folderPath = this.structure.getSeriesFolderPath(series.title);
+		this.programmaticWrites.add(normalizePath(folderPath));
 		await this.structure.createSeriesFolder(series.title);
 		if (this.settings?.includeMetadataFiles === false) {
 			return "";
@@ -70,6 +74,8 @@ export class FileManager {
 			throw new Error("Volume must have id, title, and seriesId");
 		}
 
+		const folderPath = this.structure.getVolumeFolderPath(seriesTitle, volume.title, volume.order);
+		this.programmaticWrites.add(normalizePath(folderPath));
 		await this.structure.createVolumeFolder(seriesTitle, volume.title, volume.order);
 		if (this.settings?.includeMetadataFiles === false) {
 			return "";
@@ -155,6 +161,7 @@ export class FileManager {
 	 */
 	async writeFile(filePath: string, content: string): Promise<void> {
 		const normalizedPath = normalizePath(filePath);
+		this.programmaticWrites.add(normalizedPath);
 		const file = this.app.vault.getAbstractFileByPath(normalizedPath);
 
 		if (file instanceof TFile) {
@@ -163,6 +170,10 @@ export class FileManager {
 			// Ensure parent folder exists
 			const parentPath = normalizedPath.substring(0, normalizedPath.lastIndexOf("/"));
 			if (parentPath) {
+				const parentFolder = this.app.vault.getAbstractFileByPath(parentPath);
+				if (!(parentFolder instanceof TFolder)) {
+					this.programmaticWrites.add(parentPath);
+				}
 				await this.structure.ensureFolder(parentPath);
 			}
 			await this.app.vault.create(normalizedPath, content);

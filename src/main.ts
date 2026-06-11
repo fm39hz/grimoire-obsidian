@@ -3,12 +3,13 @@
  * Sync ebook content (Series, Volumes, Chapters) with Grimoire backend API
  */
 
-import { App, Menu, Modal, Notice, Plugin, Setting, TFile, TFolder, normalizePath, Workspace } from "obsidian";
+import { App, Menu, Modal, Notice, Plugin, Setting, TFile, TFolder, normalizePath, Workspace, TAbstractFile } from "obsidian";
 import { GrimoireApi } from "./api";
 import { SyncManager } from "./sync";
 import { SeriesSelectionModal, SyncStatusBar, GrimoireTreeView, GRIMOIRE_TREE_VIEW } from "./ui";
 import { DEFAULT_SETTINGS, GrimoireSyncSettings, GrimoireSyncSettingTab } from "./settings";
-import { extractOrderFromName, joinPath } from "./utils";
+import { extractOrderFromName, joinPath, SERIES_METADATA_FILE, VOLUME_METADATA_FILE } from "./utils";
+import { parseFrontmatter } from "./vault/frontmatter";
 import type { BookTreeDto, ChapterResponse } from "./types";
 
 export default class GrimoireSyncPlugin extends Plugin {
@@ -18,6 +19,8 @@ export default class GrimoireSyncPlugin extends Plugin {
 	private statusBar: SyncStatusBar | null = null;
 	private autoSyncIntervalId: number | null = null;
 	private originalGetLeavesOfType: any = null;
+	private fileIdMap: Map<string, { id: string; type: string }> = new Map();
+	private modifyTimers: Map<string, number> = new Map();
 
 	async onload() {
 		await this.loadSettings();
@@ -47,6 +50,17 @@ export default class GrimoireSyncPlugin extends Plugin {
 		// Add settings tab
 		this.addSettingTab(new GrimoireSyncSettingTab(this.app, this));
 
+		// Register auto-sync file system events
+		this.registerEvent(this.app.vault.on("create", (file) => this.handleFileCreate(file)));
+		this.registerEvent(this.app.vault.on("modify", (file) => {
+			if (file instanceof TFile) {
+				this.handleFileModify(file);
+			}
+		}));
+		this.registerEvent(this.app.vault.on("delete", (file) => this.handleFileDelete(file)));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.handleFileRename(file, oldPath)));
+		this.registerEvent(this.app.metadataCache.on("changed", (file) => this.handleMetadataChanged(file)));
+
 		// Start auto sync after layout ready
 		this.app.workspace.onLayoutReady(() => {
 			if (this.settings.syncOnStartup) {
@@ -56,6 +70,9 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 			// Replace standard file-explorer leaf with Grimoire Tree View
 			this.replaceFileExplorerLeafs();
+
+			// Populate fileIdMap for deleted file lookups
+			this.updateFileIdMap();
 		});
 
 		console.log("Grimoire Sync plugin loaded");
@@ -63,6 +80,10 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 	onunload() {
 		this.stopAutoSyncTimer();
+
+		// Clean up auto-sync modify timers
+		this.modifyTimers.forEach((timer) => window.clearTimeout(timer));
+		this.modifyTimers.clear();
 
 		// Restore Workspace.prototype.getLeavesOfType
 		if (this.originalGetLeavesOfType) {
@@ -694,6 +715,309 @@ export default class GrimoireSyncPlugin extends Plugin {
 			}
 		}
 		return files;
+	}
+
+	private updateFileIdMap() {
+		this.fileIdMap.clear();
+		const files = this.app.vault.getMarkdownFiles();
+		for (const file of files) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			const grimoireId = cache?.frontmatter?.["grimoire_id"];
+			const type = cache?.frontmatter?.["grimoire_type"];
+			if (grimoireId && type) {
+				this.fileIdMap.set(file.path, { id: String(grimoireId), type: String(type) });
+			}
+		}
+	}
+
+	private handleMetadataChanged(file: TFile) {
+		if (file.extension !== "md") return;
+		const cache = this.app.metadataCache.getFileCache(file);
+		const grimoireId = cache?.frontmatter?.["grimoire_id"];
+		const type = cache?.frontmatter?.["grimoire_type"];
+		if (grimoireId && type) {
+			this.fileIdMap.set(file.path, { id: String(grimoireId), type: String(type) });
+		} else {
+			this.fileIdMap.delete(file.path);
+		}
+	}
+
+	private getChapterSyncContext(file: TFile) {
+		const volumeFolder = file.parent;
+		if (!volumeFolder) return null;
+		
+		const seriesFolder = volumeFolder.parent;
+		if (!seriesFolder) return null;
+
+		const volumeMetadataPath = normalizePath(joinPath(volumeFolder.path, VOLUME_METADATA_FILE));
+		const volumeMetadataFile = this.app.vault.getAbstractFileByPath(volumeMetadataPath);
+		if (!(volumeMetadataFile instanceof TFile)) return null;
+
+		const volCache = this.app.metadataCache.getFileCache(volumeMetadataFile);
+		const volumeId = volCache?.frontmatter?.["grimoire_id"];
+		if (!volumeId) return null;
+
+		const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
+		const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
+		const seriesTitle = seriesFolder.name;
+
+		return {
+			volumeId: String(volumeId),
+			volumeTitle,
+			volumeOrder,
+			seriesTitle
+		};
+	}
+
+	public async pushModifiedChapter(file: TFile): Promise<void> {
+		const cache = this.app.metadataCache.getFileCache(file);
+		const grimoireId = cache?.frontmatter?.["grimoire_id"];
+		const type = cache?.frontmatter?.["grimoire_type"];
+		if (type !== "chapter" || !grimoireId) return;
+
+		const ctx = this.getChapterSyncContext(file);
+		if (!ctx) return;
+
+		const order = Number(cache?.frontmatter?.["order"]) || 0;
+		const title = cache?.frontmatter?.["title"] || file.basename;
+
+		await this.syncManager!.pullSync.pushChapter(
+			file,
+			{ id: String(grimoireId), title, order },
+			ctx.volumeId,
+			ctx.seriesTitle,
+			ctx.volumeTitle,
+			ctx.volumeOrder,
+			order,
+			true // skipWrite = true
+		);
+	}
+
+	private handleFileModify(file: TFile) {
+		if (file.extension !== "md" || file.name === SERIES_METADATA_FILE || file.name === VOLUME_METADATA_FILE) return;
+		
+		const cache = this.app.metadataCache.getFileCache(file);
+		if (cache?.frontmatter?.["grimoire_type"] !== "chapter") return;
+
+		if (this.syncManager?.fileManager.programmaticWrites.has(file.path)) {
+			this.syncManager.fileManager.programmaticWrites.delete(file.path);
+			return;
+		}
+
+		const path = file.path;
+		if (this.modifyTimers.has(path)) {
+			window.clearTimeout(this.modifyTimers.get(path));
+		}
+
+		const timer = window.setTimeout(async () => {
+			this.modifyTimers.delete(path);
+			try {
+				await this.pushModifiedChapter(file);
+				console.debug(`Automatically pushed modified chapter: ${file.name}`);
+				this.refreshBookTreeView();
+			} catch (err) {
+				console.error(`Failed to auto-push modified chapter: ${file.name}`, err);
+			}
+		}, 3000); // 3 seconds debounce
+
+		this.modifyTimers.set(path, timer);
+	}
+
+	private async handleFileCreate(file: TAbstractFile) {
+		if (!this.api || !this.syncManager) return;
+
+		if (this.syncManager.fileManager.programmaticWrites.has(file.path)) {
+			this.syncManager.fileManager.programmaticWrites.delete(file.path);
+			return;
+		}
+
+		if (file instanceof TFolder) {
+			const syncFolder = this.settings.syncFolder;
+			const relativePath = normalizePath(file.path);
+			const syncFolderPath = normalizePath(syncFolder);
+
+			if (relativePath === syncFolderPath) return;
+
+			if (file.parent && normalizePath(file.parent.path) === syncFolderPath) {
+				try {
+					new Notice(`Creating new series on server: ${file.name}...`);
+					const series = await this.api.series.create({
+						title: file.name,
+						metadata: { authors: [], artists: [], tags: [], description: [] }
+					});
+					
+					const metadataPath = normalizePath(joinPath(file.path, SERIES_METADATA_FILE));
+					await this.app.vault.create(
+						metadataPath,
+						`---\ngrimoire_id: ${series.id}\ngrimoire_type: series\ntitle: ${series.title}\n---\n`
+					);
+					new Notice(`Series "${file.name}" initialized successfully!`);
+					this.refreshBookTreeView();
+				} catch (err) {
+					new Notice(`Failed to create series on server: ${err instanceof Error ? err.message : err}`);
+				}
+			}
+			else if (file.parent) {
+				const parentSeriesMetaPath = normalizePath(joinPath(file.parent.path, SERIES_METADATA_FILE));
+				const parentSeriesMeta = this.app.vault.getAbstractFileByPath(parentSeriesMetaPath);
+				if (parentSeriesMeta instanceof TFile) {
+					const seriesCache = this.app.metadataCache.getFileCache(parentSeriesMeta);
+					const seriesId = seriesCache?.frontmatter?.["grimoire_id"];
+					if (seriesId) {
+						try {
+							const volumeTitle = file.name.replace(/^\d+\s*-\s*/, "");
+							const volumeOrder = extractOrderFromName(file.name) ?? 0;
+							
+							new Notice(`Creating new volume on server: ${volumeTitle}...`);
+							const volume = await this.api.volumes.create({
+								seriesId: String(seriesId),
+								title: volumeTitle,
+								order: volumeOrder
+							});
+
+							const metadataPath = normalizePath(joinPath(file.path, VOLUME_METADATA_FILE));
+							await this.app.vault.create(
+								metadataPath,
+								`---\ngrimoire_id: ${volume.id}\ngrimoire_type: volume\nseries_id: ${seriesId}\norder: ${volume.order}\ntitle: ${volume.title}\n---\n`
+							);
+							new Notice(`Volume "${volumeTitle}" initialized successfully!`);
+							this.refreshBookTreeView();
+						} catch (err) {
+							new Notice(`Failed to create volume on server: ${err instanceof Error ? err.message : err}`);
+						}
+					}
+				}
+			}
+		}
+		else if (file instanceof TFile && file.extension === "md") {
+			if (file.name === SERIES_METADATA_FILE || file.name === VOLUME_METADATA_FILE) return;
+
+			if (file.parent) {
+				const volumeMetaPath = normalizePath(joinPath(file.parent.path, VOLUME_METADATA_FILE));
+				const volumeMeta = this.app.vault.getAbstractFileByPath(volumeMetaPath);
+				if (volumeMeta instanceof TFile) {
+					const cache = this.app.metadataCache.getFileCache(file);
+					if (cache?.frontmatter?.["grimoire_id"]) return;
+
+					const volCache = this.app.metadataCache.getFileCache(volumeMeta);
+					const volumeId = volCache?.frontmatter?.["grimoire_id"];
+					const seriesFolder = file.parent.parent;
+
+					if (volumeId && seriesFolder) {
+						try {
+							const title = file.basename;
+							const order = extractOrderFromName(file.basename) ?? 0;
+
+							new Notice(`Creating new chapter on server: ${title}...`);
+							const chapter = await this.api.chapters.create({
+								volumeId: String(volumeId),
+								title,
+								order,
+								rawContent: ""
+							});
+							
+							const seriesTitle = seriesFolder.name;
+							const volumeTitle = file.parent.name.replace(/^\d+\s*-\s*/, "");
+							const volumeOrder = extractOrderFromName(file.parent.name) ?? 0;
+
+							await this.syncManager.fileManager.writeChapterFile(
+								chapter,
+								seriesTitle,
+								volumeTitle,
+								volumeOrder,
+								order
+							);
+							new Notice(`Chapter "${title}" initialized successfully!`);
+							this.refreshBookTreeView();
+						} catch (err) {
+							new Notice(`Failed to create chapter on server: ${err instanceof Error ? err.message : err}`);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	private async handleFileDelete(file: TAbstractFile) {
+		if (!this.api || !this.syncManager) return;
+		
+		if (this.syncManager.fileManager.programmaticWrites.has(file.path)) {
+			this.syncManager.fileManager.programmaticWrites.delete(file.path);
+			return;
+		}
+
+		const mapped = this.fileIdMap.get(file.path);
+		if (!mapped) return;
+
+		this.fileIdMap.delete(file.path);
+
+		try {
+			if (mapped.type === "chapter") {
+				new Notice(`Deleting chapter on server...`);
+				await this.api.chapters.delete(mapped.id);
+				console.debug(`Deleted chapter on server: ${mapped.id}`);
+			} else if (mapped.type === "volume" && file.name === VOLUME_METADATA_FILE) {
+				new Notice(`Deleting volume on server...`);
+				await this.api.volumes.delete(mapped.id);
+				console.debug(`Deleted volume on server: ${mapped.id}`);
+			} else if (mapped.type === "series" && file.name === SERIES_METADATA_FILE) {
+				new Notice(`Deleting series on server...`);
+				await this.api.series.delete(mapped.id);
+				console.debug(`Deleted series on server: ${mapped.id}`);
+			}
+			this.refreshBookTreeView();
+		} catch (err) {
+			new Notice(`Failed to delete on server: ${err instanceof Error ? err.message : err}`);
+		}
+	}
+
+	private async handleFileRename(file: TAbstractFile, oldPath: string) {
+		if (!this.api || !this.syncManager) return;
+
+		if (this.syncManager.fileManager.programmaticWrites.has(file.path)) {
+			this.syncManager.fileManager.programmaticWrites.delete(file.path);
+			return;
+		}
+
+		const mapped = this.fileIdMap.get(oldPath);
+		if (mapped) {
+			this.fileIdMap.delete(oldPath);
+			this.fileIdMap.set(file.path, mapped);
+
+			try {
+				if (mapped.type === "chapter" && file instanceof TFile) {
+					new Notice(`Renaming chapter on server...`);
+					const cache = this.app.metadataCache.getFileCache(file);
+					const order = Number(cache?.frontmatter?.["order"]) || 0;
+					await this.api.chapters.update(mapped.id, {
+						title: file.basename,
+						order
+					});
+				} else if (mapped.type === "volume" && file instanceof TFile) {
+					const volumeFolder = file.parent;
+					if (volumeFolder) {
+						new Notice(`Renaming volume on server...`);
+						const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
+						const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
+						await this.api.volumes.update(mapped.id, {
+							title: volumeTitle,
+							order: volumeOrder
+						});
+					}
+				} else if (mapped.type === "series" && file instanceof TFile) {
+					const seriesFolder = file.parent;
+					if (seriesFolder) {
+						new Notice(`Renaming series on server...`);
+						await this.api.series.update(mapped.id, {
+							title: seriesFolder.name
+						});
+					}
+				}
+				this.refreshBookTreeView();
+			} catch (err) {
+				new Notice(`Failed to rename on server: ${err instanceof Error ? err.message : err}`);
+			}
+		}
 	}
 }
 

@@ -7,6 +7,8 @@ export const GRIMOIRE_TREE_VIEW = "grimoire-book-tree";
 export class GrimoireTreeView extends ItemView {
 	private plugin: GrimoireSyncPlugin;
 	private expandedPaths: Set<string> = new Set();
+	private selectedPaths: Set<string> = new Set();
+	private lastClickedPath: string | null = null;
 	private debounceTimer: number | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: GrimoireSyncPlugin) {
@@ -45,6 +47,8 @@ export class GrimoireTreeView extends ItemView {
 
 	async onClose() {
 		this.expandedPaths.clear();
+		this.selectedPaths.clear();
+		this.lastClickedPath = null;
 		if (this.debounceTimer !== null) {
 			window.clearTimeout(this.debounceTimer);
 			this.debounceTimer = null;
@@ -71,6 +75,7 @@ export class GrimoireTreeView extends ItemView {
 		const rootFolder = this.app.vault.getRoot();
 		this.renderFolderChildren(this.contentEl, rootFolder);
 		this.updateActiveFileHighlight();
+		this.updateSelectionHighlights();
 	}
 
 	/**
@@ -195,30 +200,41 @@ export class GrimoireTreeView extends ItemView {
 			this.renderFolderChildren(childrenEl, folder);
 		}
 
-		// Toggle expand/collapse
+		// Chevron collapse click
+		iconEl.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this.toggleFolderCollapse(folder, folderEl, iconEl, childrenEl);
+		});
+
+		// Folder title selection click
 		titleEl.addEventListener("click", (e) => {
 			e.stopPropagation();
-			const currentlyExpanded = this.expandedPaths.has(folder.path);
-			if (currentlyExpanded) {
-				this.expandedPaths.delete(folder.path);
-				folderEl.addClass("is-collapsed");
-				iconEl.addClass("is-collapsed");
-				childrenEl.empty();
-			} else {
-				this.expandedPaths.add(folder.path);
-				folderEl.removeClass("is-collapsed");
-				iconEl.removeClass("is-collapsed");
-				this.renderFolderChildren(childrenEl, folder);
+			this.handleItemSelectionClick(e, folder.path);
+			
+			if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+				this.toggleFolderCollapse(folder, folderEl, iconEl, childrenEl);
 			}
 		});
 
 		// Trigger standard Obsidian context menu on right click
 		titleEl.addEventListener("contextmenu", (e) => {
-			e.preventDefault();
-			const menu = new Menu();
-			this.app.workspace.trigger("file-menu", menu, folder, "file-explorer");
-			menu.showAtPosition({ x: e.clientX, y: e.clientY });
+			this.handleItemContextMenu(e, folder);
 		});
+	}
+
+	private toggleFolderCollapse(folder: TFolder, folderEl: HTMLElement, iconEl: HTMLElement, childrenEl: HTMLElement) {
+		const currentlyExpanded = this.expandedPaths.has(folder.path);
+		if (currentlyExpanded) {
+			this.expandedPaths.delete(folder.path);
+			folderEl.addClass("is-collapsed");
+			iconEl.addClass("is-collapsed");
+			childrenEl.empty();
+		} else {
+			this.expandedPaths.add(folder.path);
+			folderEl.removeClass("is-collapsed");
+			iconEl.removeClass("is-collapsed");
+			this.renderFolderChildren(childrenEl, folder);
+		}
 	}
 
 	/**
@@ -244,10 +260,7 @@ export class GrimoireTreeView extends ItemView {
 		titleEl.addEventListener("click", async (e) => {
 			e.stopPropagation();
 			
-			this.contentEl.querySelectorAll(".tree-item-self.is-active").forEach((el) => {
-				el.removeClass("is-active");
-			});
-			titleEl.addClass("is-active");
+			this.handleItemSelectionClick(e, file.path);
 
 			const leaf = this.app.workspace.getLeaf(false);
 			if (leaf) {
@@ -257,11 +270,124 @@ export class GrimoireTreeView extends ItemView {
 
 		// Trigger standard Obsidian context menu on right click
 		titleEl.addEventListener("contextmenu", (e) => {
-			e.preventDefault();
-			const menu = new Menu();
-			this.app.workspace.trigger("file-menu", menu, file, "file-explorer");
-			menu.showAtPosition({ x: e.clientX, y: e.clientY });
+			this.handleItemContextMenu(e, file);
 		});
+	}
+
+	/**
+	 * Selection click handler with modifier support (Ctrl, Shift, etc.)
+	 */
+	private handleItemSelectionClick(e: MouseEvent, path: string) {
+		const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+		const isShift = e.shiftKey;
+
+		if (isShift && this.lastClickedPath) {
+			// Shift + Click: Select range of visible rows
+			const rows = Array.from(this.contentEl.querySelectorAll(".tree-item-self")) as HTMLElement[];
+			const idx1 = rows.findIndex(row => row.getAttribute("data-path") === this.lastClickedPath);
+			const idx2 = rows.findIndex(row => row.getAttribute("data-path") === path);
+
+			if (idx1 !== -1 && idx2 !== -1) {
+				const start = Math.min(idx1, idx2);
+				const end = Math.max(idx1, idx2);
+
+				if (!isCmdOrCtrl) {
+					this.selectedPaths.clear();
+				}
+
+				for (let i = start; i <= end; i++) {
+					const row = rows[i];
+					const rowPath = row?.getAttribute("data-path");
+					if (rowPath) {
+						this.selectedPaths.add(rowPath);
+					}
+				}
+			}
+		} else if (isCmdOrCtrl) {
+			// Ctrl/Cmd + Click: Toggle individual selection
+			if (this.selectedPaths.has(path)) {
+				this.selectedPaths.delete(path);
+			} else {
+				this.selectedPaths.add(path);
+			}
+			this.lastClickedPath = path;
+		} else {
+			// Standard Click: Clear selections and select exclusively
+			this.selectedPaths.clear();
+			this.selectedPaths.add(path);
+			this.lastClickedPath = path;
+		}
+
+		this.updateSelectionHighlights();
+	}
+
+	/**
+	 * Handle context menu for single/multiple selection
+	 */
+	private handleItemContextMenu(e: MouseEvent, file: TAbstractFile) {
+		e.preventDefault();
+		e.stopPropagation();
+
+		// If right-clicked item is not in selection list, select it exclusively
+		if (!this.selectedPaths.has(file.path)) {
+			this.selectedPaths.clear();
+			this.selectedPaths.add(file.path);
+			this.lastClickedPath = file.path;
+			this.updateSelectionHighlights();
+		}
+
+		const menu = new Menu();
+
+		const selectedFiles: TAbstractFile[] = [];
+		this.selectedPaths.forEach(path => {
+			const f = this.app.vault.getAbstractFileByPath(path);
+			if (f) {
+				selectedFiles.push(f);
+			}
+		});
+
+		if (selectedFiles.length > 1) {
+			// Trigger files-menu context menu event (for multi-selection)
+			this.app.workspace.trigger("files-menu", menu, selectedFiles, "file-explorer");
+		} else {
+			// Trigger file-menu context menu event (for single selection)
+			this.app.workspace.trigger("file-menu", menu, file, "file-explorer");
+		}
+
+		// Add rename option (single file only)
+		if (selectedFiles.length <= 1) {
+			menu.addSeparator();
+			menu.addItem((item) => {
+				item
+					.setTitle("Rename")
+					.setIcon("pencil")
+					.onClick(() => {
+						const newName = window.prompt("Rename to:", file.name);
+						if (newName && newName.trim() && newName !== file.name) {
+							const newPath = file.parent
+								? `${file.parent.path}/${newName.trim()}`
+								: newName.trim();
+							this.app.fileManager.renameFile(file, newPath);
+						}
+					});
+			});
+		}
+
+		// Add delete option for all selections
+		menu.addSeparator();
+		menu.addItem((item) => {
+			item
+				.setTitle(selectedFiles.length > 1 ? `Delete ${selectedFiles.length} files` : "Delete")
+				.setIcon("trash")
+				.onClick(async () => {
+					const targets = selectedFiles.length > 0 ? selectedFiles : [file];
+					for (const f of targets) {
+						await this.app.fileManager.trashFile(f);
+					}
+				});
+		});
+
+		menu.showAtPosition({ x: e.clientX, y: e.clientY });
 	}
 
 	/**
@@ -298,5 +424,25 @@ export class GrimoireTreeView extends ItemView {
 				// Prevent issues with weird file paths
 			}
 		}
+	}
+
+	/**
+	 * Apply standard .is-selected classes to all selected elements in the DOM
+	 */
+	private updateSelectionHighlights() {
+		this.contentEl.querySelectorAll(".tree-item-self.is-selected").forEach((el) => {
+			el.removeClass("is-selected");
+		});
+
+		this.selectedPaths.forEach((path) => {
+			try {
+				const el = this.contentEl.querySelector(`.tree-item-self[data-path="${CSS.escape(path)}"]`);
+				if (el) {
+					el.addClass("is-selected");
+				}
+			} catch (err) {
+				// Prevent path selector issues
+			}
+		});
 	}
 }
