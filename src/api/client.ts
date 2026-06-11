@@ -216,8 +216,11 @@ export class ApiClient {
 	 */
 	private async request<T>(options: RequestUrlParam): Promise<T> {
 		try {
-			const response: RequestUrlResponse = await requestUrl(options);
-			
+			const response: RequestUrlResponse = await requestUrl({
+				...options,
+				throw: false,
+			});
+
 			if (response.status >= 400) {
 				let problemDetails: ProblemDetails | undefined;
 				try {
@@ -226,6 +229,13 @@ export class ApiClient {
 					// Response might not be JSON
 				}
 				throw new ApiError(response.status, problemDetails);
+			}
+
+			// 204 No Content or empty body - return undefined
+			const contentLength = response.headers?.["content-length"];
+			const hasBody = contentLength !== "0" && response.text?.trim().length > 0;
+			if (!hasBody) {
+				return undefined as T;
 			}
 
 			return response.json as T;
