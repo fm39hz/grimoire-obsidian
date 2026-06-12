@@ -720,6 +720,48 @@ export default class GrimoireSyncPlugin extends Plugin {
 		return files;
 	}
 
+	/**
+	 * Get the top-level series folder that contains the given path.
+	 * Returns null if the path is not inside the configured sync folder.
+	 */
+	private getSeriesFolder(filePath: string): TFolder | null {
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		const normalized = normalizePath(filePath);
+		if (!normalized.startsWith(syncFolder + "/") && normalized !== syncFolder) return null;
+		const relative = normalized.slice(syncFolder.length + 1);
+		const seriesName = relative.split("/")[0];
+		if (!seriesName) return null;
+		const folder = this.app.vault.getAbstractFileByPath(syncFolder + "/" + seriesName);
+		return folder instanceof TFolder ? folder : null;
+	}
+
+	/**
+	 * Returns false when a series has been explicitly desynced
+	 * (grimoire_synced: false in _series.md). Defaults to true.
+	 */
+	public isSeriesSynced(seriesFolder: TFolder): boolean {
+		const metaPath = normalizePath(joinPath(seriesFolder.path, SERIES_METADATA_FILE));
+		const metaFile = this.app.vault.getAbstractFileByPath(metaPath);
+		if (!(metaFile instanceof TFile)) return true;
+		const cache = this.app.metadataCache.getFileCache(metaFile);
+		return cache?.frontmatter?.["grimoire_synced"] !== false;
+	}
+
+	/**
+	 * Toggle sync state of a series by updating _series.md frontmatter.
+	 */
+	public async toggleSeriesSync(seriesFolder: TFolder): Promise<void> {
+		if (!this.syncManager) return;
+		const currentlySynced = this.isSeriesSynced(seriesFolder);
+		const metaPath = normalizePath(joinPath(seriesFolder.path, SERIES_METADATA_FILE));
+		await this.syncManager.fileManager.updateFrontmatter(metaPath, {
+			grimoire_synced: !currentlySynced,
+		});
+		const label = currentlySynced ? "desynced" : "synced";
+		new Notice(`Series "${seriesFolder.name}" ${label} from Grimoire.`);
+		this.refreshBookTreeView();
+	}
+
 	private updateFileIdMap() {
 		this.fileIdMap.clear();
 		const files = this.app.vault.getMarkdownFiles();
@@ -798,7 +840,10 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 	private handleFileModify(file: TFile) {
 		if (file.extension !== "md" || file.name === SERIES_METADATA_FILE || file.name === VOLUME_METADATA_FILE) return;
-		
+
+		const seriesFolder = this.getSeriesFolder(file.path);
+		if (seriesFolder && !this.isSeriesSynced(seriesFolder)) return;
+
 		const cache = this.app.metadataCache.getFileCache(file);
 		if (cache?.frontmatter?.["grimoire_type"] !== "chapter") return;
 
@@ -828,6 +873,9 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 	private async handleFileCreate(file: TAbstractFile) {
 		if (!this.api || !this.syncManager) return;
+
+		const seriesFolder = this.getSeriesFolder(file.path);
+		if (seriesFolder && !this.isSeriesSynced(seriesFolder)) return;
 
 		if (this.syncManager.fileManager.programmaticWrites.has(file.path)) {
 			this.syncManager.fileManager.programmaticWrites.delete(file.path);
@@ -943,7 +991,10 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 	private async handleFileDelete(file: TAbstractFile) {
 		if (!this.api || !this.syncManager) return;
-		
+
+		const seriesFolder = this.getSeriesFolder(file.path);
+		if (seriesFolder && !this.isSeriesSynced(seriesFolder)) return;
+
 		if (this.syncManager.fileManager.programmaticWrites.has(file.path)) {
 			this.syncManager.fileManager.programmaticWrites.delete(file.path);
 			return;
@@ -976,6 +1027,9 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 	private async handleFileRename(file: TAbstractFile, oldPath: string) {
 		if (!this.api || !this.syncManager) return;
+
+		const seriesFolder = this.getSeriesFolder(file.path);
+		if (seriesFolder && !this.isSeriesSynced(seriesFolder)) return;
 
 		if (this.syncManager.fileManager.programmaticWrites.has(file.path)) {
 			this.syncManager.fileManager.programmaticWrites.delete(file.path);

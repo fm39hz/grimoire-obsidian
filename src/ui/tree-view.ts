@@ -192,7 +192,12 @@ export class GrimoireTreeView extends ItemView {
 		const iconEl = titleEl.createDiv({ cls: `tree-item-icon nav-folder-collapse-indicator collapse-icon${isExpanded ? "" : " is-collapsed"}` });
 		setIcon(iconEl, "right-triangle");
 
-		titleEl.createDiv({ cls: "tree-item-inner nav-folder-title-content", text: meta.title });
+		const innerEl = titleEl.createDiv({ cls: "tree-item-inner nav-folder-title-content", text: meta.title });
+
+		// Show a visual badge for desynced series
+		if (meta.type === "series" && !this.plugin.isSeriesSynced(folder)) {
+			innerEl.createSpan({ cls: "grimoire-desynced-badge", text: " [desynced]" });
+		}
 
 		const childrenEl = folderEl.createDiv({ cls: "tree-item-children nav-folder-children" });
 
@@ -371,6 +376,23 @@ export class GrimoireTreeView extends ItemView {
 						}
 					});
 			});
+		}
+
+		// Add sync/desync option for series folders (single selection only)
+		if (selectedFiles.length <= 1 && file instanceof TFolder) {
+			const meta = this.getFileMetadata(file);
+			if (meta?.type === "series") {
+				const isSynced = this.plugin.isSeriesSynced(file);
+				menu.addSeparator();
+				menu.addItem((item) => {
+					item
+						.setTitle(isSynced ? "Desync from Grimoire" : "Sync with Grimoire")
+						.setIcon(isSynced ? "unlink" : "link")
+						.onClick(async () => {
+							await this.plugin.toggleSeriesSync(file);
+						});
+				});
+			}
 		}
 
 		// Add delete option for all selections
