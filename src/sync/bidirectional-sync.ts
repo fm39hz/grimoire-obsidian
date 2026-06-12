@@ -36,7 +36,7 @@ interface SyncedSeries {
 	title: string;
 }
 
-export class PullSync {
+export class BidirectionalSync {
 	constructor(
 		private api: GrimoireApi,
 		private fileManager: FileManager,
@@ -548,6 +548,9 @@ export class PullSync {
 		const order = Number(frontmatter?.["order"]) || extractOrderFromName(file.basename) || 0;
 
 		if (remoteChapter && remoteChapter.id) {
+			// If the chapter exists, we update its metadata (title, order) on the server first.
+			// Note: The backend's Update endpoint only supports updating metadata (Title, Order)
+			// and does not process rawContent/markdown updates.
 			if (title !== remoteChapter.title || order !== remoteChapter.order) {
 				await this.api.chapters.update(remoteChapter.id, {
 					title,
@@ -556,6 +559,8 @@ export class PullSync {
 			}
 		}
 
+		// To update the content (or create a new chapter), we call the Create (upsert) endpoint.
+		// The server will match on volumeId + order and ingest/update the rawContent.
 		const updatedChapter = await this.api.chapters.create({
 			volumeId,
 			order,
@@ -751,5 +756,12 @@ export class PullSync {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Update settings reference
+	 */
+	public setSettings(settings: GrimoireSyncSettings): void {
+		this.settings = settings;
 	}
 }

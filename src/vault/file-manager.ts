@@ -23,7 +23,26 @@ import type { GrimoireApi } from "../api";
 import type { GrimoireSyncSettings } from "../settings";
 
 export class FileManager {
-	public programmaticWrites: Set<string> = new Set();
+	private _programmaticPaths: Set<string> = new Set();
+
+	/**
+	 * Mark a path as programmatically written so event handlers can ignore the next change event
+	 */
+	public markAsProgrammatic(path: string): void {
+		this._programmaticPaths.add(normalizePath(path));
+	}
+
+	/**
+	 * Check if a path is marked as programmatic and consume (remove) the flag if so
+	 */
+	public consumeProgrammatic(path: string): boolean {
+		const normalized = normalizePath(path);
+		if (this._programmaticPaths.has(normalized)) {
+			this._programmaticPaths.delete(normalized);
+			return true;
+		}
+		return false;
+	}
 
 	constructor(
 		private app: App,
@@ -41,7 +60,7 @@ export class FileManager {
 		}
 
 		const folderPath = this.structure.getSeriesFolderPath(series.title);
-		this.programmaticWrites.add(normalizePath(folderPath));
+		this.markAsProgrammatic(folderPath);
 		await this.structure.createSeriesFolder(series.title);
 		if (this.settings?.includeMetadataFiles === false) {
 			return "";
@@ -75,7 +94,7 @@ export class FileManager {
 		}
 
 		const folderPath = this.structure.getVolumeFolderPath(seriesTitle, volume.title, volume.order);
-		this.programmaticWrites.add(normalizePath(folderPath));
+		this.markAsProgrammatic(folderPath);
 		await this.structure.createVolumeFolder(seriesTitle, volume.title, volume.order);
 		if (this.settings?.includeMetadataFiles === false) {
 			return "";
@@ -161,7 +180,7 @@ export class FileManager {
 	 */
 	async writeFile(filePath: string, content: string): Promise<void> {
 		const normalizedPath = normalizePath(filePath);
-		this.programmaticWrites.add(normalizedPath);
+		this.markAsProgrammatic(normalizedPath);
 		const file = this.app.vault.getAbstractFileByPath(normalizedPath);
 
 		if (file instanceof TFile) {
@@ -172,7 +191,7 @@ export class FileManager {
 			if (parentPath) {
 				const parentFolder = this.app.vault.getAbstractFileByPath(parentPath);
 				if (!(parentFolder instanceof TFolder)) {
-					this.programmaticWrites.add(parentPath);
+					this.markAsProgrammatic(parentPath);
 				}
 				await this.structure.ensureFolder(parentPath);
 			}
@@ -262,5 +281,12 @@ export class FileManager {
 		} catch {
 			return null;
 		}
+	}
+
+	/**
+	 * Update settings reference
+	 */
+	public setSettings(settings: GrimoireSyncSettings): void {
+		this.settings = settings;
 	}
 }

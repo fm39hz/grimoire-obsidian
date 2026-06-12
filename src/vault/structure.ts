@@ -132,7 +132,9 @@ export class VaultStructure {
 	}
 
 	/**
-	 * Get the path for a chapter file
+	 * Get the path for a chapter file.
+	 * Note: chapterOrder is intentionally unused in the file name format (preserving Title-only filename)
+	 * since ordering is handled by custom UI.
 	 */
 	getChapterFilePath(
 		seriesTitle: string,

@@ -1,7 +1,4 @@
-/**
- * Frontmatter parsing and writing utilities
- */
-
+import { parseYaml, stringifyYaml } from "obsidian";
 import type {
 	Frontmatter,
 	SeriesFrontmatter,
@@ -32,7 +29,7 @@ export function parseFrontmatter(content: string): {
 	const remainingContent = content.slice(match[0].length);
 
 	try {
-		const frontmatter = parseYaml(yamlContent);
+		const frontmatter = parseYaml(yamlContent) as Record<string, unknown>;
 		return { frontmatter, content: remainingContent };
 	} catch {
 		return { frontmatter: null, content };
@@ -40,130 +37,15 @@ export function parseFrontmatter(content: string): {
 }
 
 /**
- * Simple YAML parser for frontmatter
- * Handles basic types: strings, numbers, booleans, arrays
- */
-function parseYaml(yaml: string): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
-	const lines = yaml.split("\n");
-	let currentKey: string | null = null;
-	let currentArray: string[] | null = null;
-
-	for (const line of lines) {
-		// Skip empty lines
-		if (!line.trim()) continue;
-
-		// Check for array item
-		if (line.match(/^\s+-\s+/) && currentKey && currentArray) {
-			const value = line.replace(/^\s+-\s+/, "").trim();
-			currentArray.push(unquote(value));
-			continue;
-		}
-
-		// Check for key-value pair
-		const kvMatch = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*)$/);
-		if (kvMatch && kvMatch[1]) {
-			// Save previous array if any
-			if (currentKey && currentArray) {
-				result[currentKey] = currentArray;
-				currentArray = null;
-			}
-
-			currentKey = kvMatch[1];
-			const value = kvMatch[2]?.trim() || "";
-
-			if (value === "" || value === "[]") {
-				// Could be start of array or empty value
-				currentArray = [];
-			} else if (value.startsWith("[") && value.endsWith("]")) {
-				// Inline array
-				const arrayContent = value.slice(1, -1);
-				result[currentKey] = arrayContent
-					.split(",")
-					.map((s) => unquote(s.trim()))
-					.filter(Boolean);
-				currentKey = null;
-			} else {
-				result[currentKey] = parseValue(value);
-				currentKey = null;
-			}
-		}
-	}
-
-	// Save final array if any
-	if (currentKey && currentArray) {
-		result[currentKey] = currentArray;
-	}
-
-	return result;
-}
-
-/**
- * Parse a YAML value
- */
-function parseValue(value: string): unknown {
-	// Boolean
-	if (value === "true") return true;
-	if (value === "false") return false;
-
-	// Null
-	if (value === "null" || value === "~") return null;
-
-	// Number
-	if (/^-?\d+$/.test(value)) return parseInt(value, 10);
-	if (/^-?\d+\.\d+$/.test(value)) return parseFloat(value);
-
-	// String (remove quotes if present)
-	return unquote(value);
-}
-
-/**
- * Remove quotes from a string value
- */
-function unquote(value: string): string {
-	if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-		return value.slice(1, -1);
-	}
-	return value;
-}
-
-/**
  * Convert frontmatter object to YAML string
  */
 export function stringifyFrontmatter(frontmatter: Record<string, unknown>): string {
-	const lines: string[] = ["---"];
-
-	for (const [key, value] of Object.entries(frontmatter)) {
-		if (value === undefined || value === null) continue;
-
-		if (Array.isArray(value)) {
-			if (value.length === 0) {
-				lines.push(`${key}: []`);
-			} else {
-				lines.push(`${key}:`);
-				for (const item of value) {
-					lines.push(`  - ${quoteIfNeeded(String(item))}`);
-				}
-			}
-		} else if (typeof value === "string") {
-			lines.push(`${key}: ${quoteIfNeeded(value)}`);
-		} else if (typeof value === "number" || typeof value === "boolean") {
-			lines.push(`${key}: ${value}`);
-		}
+	try {
+		const yaml = stringifyYaml(frontmatter);
+		return `---\n${yaml.trim()}\n---`;
+	} catch {
+		return "---\n---";
 	}
-
-	lines.push("---");
-	return lines.join("\n");
-}
-
-/**
- * Quote a string if it contains special characters
- */
-function quoteIfNeeded(value: string): string {
-	if (/[:#\[\]{}|>&*!,]/.test(value) || value.includes("\n")) {
-		return `"${value.replace(/"/g, '\\"')}"`;
-	}
-	return value;
 }
 
 /**

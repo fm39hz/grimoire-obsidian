@@ -3,5 +3,5 @@
  */
 
 export { SyncManager } from "./sync-manager";
-export { PullSync } from "./pull";
-export type { PullProgress, ProgressCallback } from "./pull";
+export { BidirectionalSync } from "./bidirectional-sync";
+export type { PullProgress, ProgressCallback } from "./bidirectional-sync";

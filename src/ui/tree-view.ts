@@ -412,12 +412,9 @@ export class GrimoireTreeView extends ItemView {
 		menu.showAtPosition({ x: e.clientX, y: e.clientY });
 	}
 
-	/**
-	 * Update chapter status dot based on local modifications
-	 */
 	private updateChapterStatusIndicator(file: TFile, dotEl: HTMLElement) {
 		dotEl.className = "grimoire-status-dot";
-		const isModified = this.plugin.syncManager?.pullSync.isLocallyModified(file);
+		const isModified = this.plugin.syncManager?.isLocallyModified(file);
 		if (isModified) {
 			dotEl.addClass("status-modified");
 			dotEl.setAttribute("title", "Modified locally");
