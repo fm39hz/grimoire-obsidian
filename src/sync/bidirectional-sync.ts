@@ -566,6 +566,10 @@ export class BidirectionalSync {
 			order,
 			title,
 			rawContent: body
+		}, {
+			format: "markdown",
+			footnoteStyle: this.settings?.footnoteStyle,
+			enableDropcap: this.settings?.enableDropcap
 		});
 
 		if (!skipWrite) {

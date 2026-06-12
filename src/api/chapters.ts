@@ -57,8 +57,11 @@ export class ChaptersApi {
 	/**
 	 * Create a new chapter
 	 */
-	async create(data: CreateChapterRequest): Promise<ChapterResponse> {
-		return this.client.post<ChapterResponse>("/api/v1/chapters", data);
+	async create(
+		data: CreateChapterRequest,
+		params?: { format?: string; footnoteStyle?: string; enableDropcap?: boolean }
+	): Promise<ChapterResponse> {
+		return this.client.post<ChapterResponse>("/api/v1/chapters", data, params);
 	}
 
 	/**
@@ -78,14 +81,21 @@ export class ChaptersApi {
 	/**
 	 * Split a chapter into multiple chapters
 	 */
-	async split(id: string, data: SplitChapterRequest): Promise<ChapterResponse[]> {
-		return this.client.post<ChapterResponse[]>(`/api/v1/chapters/${id}/split`, data);
+	async split(
+		id: string,
+		data: SplitChapterRequest,
+		params?: { format?: string; footnoteStyle?: string; enableDropcap?: boolean }
+	): Promise<ChapterResponse[]> {
+		return this.client.post<ChapterResponse[]>(`/api/v1/chapters/${id}/split`, data, params);
 	}
 
 	/**
 	 * Merge multiple chapters into one
 	 */
-	async merge(data: MergeChaptersRequest): Promise<ChapterResponse> {
-		return this.client.post<ChapterResponse>("/api/v1/chapters/merge", data);
+	async merge(
+		data: MergeChaptersRequest,
+		params?: { format?: string; footnoteStyle?: string; enableDropcap?: boolean }
+	): Promise<ChapterResponse> {
+		return this.client.post<ChapterResponse>("/api/v1/chapters/merge", data, params);
 	}
 }

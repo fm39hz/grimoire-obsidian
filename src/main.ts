@@ -24,6 +24,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 	private autoSyncIntervalId: number | null = null;
 	private originalGetLeavesOfType: any = null;
 	private isPluginEnabled = false;
+	private ribbonIconEl: HTMLElement | null = null;
 
 	async onload() {
 		this.isPluginEnabled = true;
@@ -39,7 +40,41 @@ export default class GrimoireSyncPlugin extends Plugin {
 		this.patchWorkspaceLeaves();
 
 		// Add Ribbon Icon to toggle Book Tree
-		this.addRibbonIcon("folder-tree", "Open Grimoire Book Tree", () => this.initBookTreeView());
+		this.ribbonIconEl = this.addRibbonIcon("folder-tree", "Open Grimoire Book Tree", () => this.initBookTreeView());
+
+		// Register context menu for quick options on right-click of the ribbon icon
+		this.ribbonIconEl.addEventListener("contextmenu", (e) => {
+			const menu = new Menu();
+			menu.addItem((item) =>
+				item
+					.setTitle("Open Book Tree")
+					.setIcon("folder-tree")
+					.onClick(() => this.initBookTreeView())
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle("Sync All Series")
+					.setIcon("sync")
+					.onClick(() => this.pullAll())
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle("Open Settings")
+					.setIcon("settings")
+					.onClick(() => {
+						try {
+							(this.app as any).setting.open();
+							(this.app as any).setting.openTabById("grimoire-sync");
+						} catch {
+							new Notice("Failed to open settings tab");
+						}
+					})
+			);
+			menu.showAtMouseEvent(e);
+		});
+
+		// Move ribbon icon to the top if parent is already attached
+		this.arrangeRibbonIcon();
 
 		// Add status bar item
 		const statusBarEl = this.addStatusBarItem();
@@ -84,6 +119,9 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 			// Populate fileIdMap for deleted file lookups
 			this.vaultEventHandler?.updateFileIdMap();
+
+			// Make sure our ribbon icon is at the very top of the ribbon
+			this.arrangeRibbonIcon();
 		});
 
 		console.log("Grimoire Sync plugin loaded");
@@ -118,6 +156,12 @@ export default class GrimoireSyncPlugin extends Plugin {
 		}
 		if (leaf) {
 			this.app.workspace.revealLeaf(leaf);
+		}
+	}
+
+	private arrangeRibbonIcon() {
+		if (this.ribbonIconEl && this.ribbonIconEl.parentElement) {
+			this.ribbonIconEl.parentElement.prepend(this.ribbonIconEl);
 		}
 	}
 
@@ -173,6 +217,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 				this.app,
 				this.syncManager,
 				this.api,
+				this.settings,
 				() => this.refreshBookTreeView()
 			);
 		} else {

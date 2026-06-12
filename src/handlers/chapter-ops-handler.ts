@@ -3,12 +3,14 @@ import type { GrimoireApi } from "../api";
 import type { SyncManager } from "../sync";
 import { ChapterTitleModal } from "../ui";
 import { joinPath } from "../utils";
+import type { GrimoireSyncSettings } from "../settings";
 
 export class ChapterOpsHandler {
 	constructor(
 		private app: App,
 		private syncManager: SyncManager,
 		private api: GrimoireApi,
+		private settings: GrimoireSyncSettings,
 		private refreshBookTreeView: () => void
 	) {}
 
@@ -71,7 +73,11 @@ export class ChapterOpsHandler {
 							}
 						}
 
-						const mergedChapter = await this.api.chapters.merge({ chapterIds });
+						const mergedChapter = await this.api.chapters.merge({ chapterIds }, {
+							format: "markdown",
+							footnoteStyle: this.settings.footnoteStyle,
+							enableDropcap: this.settings.enableDropcap
+						});
 						new Notice("Chapters merged successfully on server!");
 
 						// Trash the old files first (mark as programmatic to skip server delete)
@@ -169,6 +175,10 @@ export class ChapterOpsHandler {
 
 							const resultChapters = await this.api.chapters.split(chapterId, {
 								splitPoints: [{ segmentIndex, newChapterTitle: newTitle }]
+							}, {
+								format: "markdown",
+								footnoteStyle: this.settings.footnoteStyle,
+								enableDropcap: this.settings.enableDropcap
 							});
 
 							new Notice("Chapter split successfully on server!");

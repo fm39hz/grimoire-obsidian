@@ -12,7 +12,7 @@ export class SyncManager {
 	public structure: VaultStructure;
 	public bidirectionalSync: BidirectionalSync;
 	private state: SyncState;
-	private settings: GrimoireSyncSettings;
+	public settings: GrimoireSyncSettings;
 
 	constructor(private app: App, api: GrimoireApi, settings: GrimoireSyncSettings) {
 		this.api = api;
