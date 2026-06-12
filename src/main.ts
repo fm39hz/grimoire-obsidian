@@ -8,7 +8,7 @@ import { GrimoireApi } from "./api";
 import { SyncManager } from "./sync";
 import { SeriesSelectionModal, SyncStatusBar, GrimoireTreeView, GRIMOIRE_TREE_VIEW, ChapterTitleModal } from "./ui";
 import { DEFAULT_SETTINGS, GrimoireSyncSettings, GrimoireSyncSettingTab } from "./settings";
-import { extractOrderFromName, joinPath, SERIES_METADATA_FILE, VOLUME_METADATA_FILE } from "./utils";
+import { joinPath, SERIES_METADATA_FILE, VOLUME_METADATA_FILE } from "./utils";
 import { parseFrontmatter } from "./vault/frontmatter";
 import type { BookTreeDto, ChapterResponse } from "./types";
 import { VaultEventHandler } from "./handlers/vault-event-handler";
@@ -23,8 +23,10 @@ export default class GrimoireSyncPlugin extends Plugin {
 	private statusBar: SyncStatusBar | null = null;
 	private autoSyncIntervalId: number | null = null;
 	private originalGetLeavesOfType: any = null;
+	private isPluginEnabled = false;
 
 	async onload() {
+		this.isPluginEnabled = true;
 		await this.loadSettings();
 
 		// Initialize API client if configured
@@ -63,6 +65,13 @@ export default class GrimoireSyncPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.vaultEventHandler?.handleFileRename(file, oldPath)));
 		this.registerEvent(this.app.metadataCache.on("changed", (file) => this.vaultEventHandler?.handleMetadataChanged(file)));
 
+		// Watch layout changes to replace new file-explorers with Grimoire Tree View
+		this.registerEvent(this.app.workspace.on("layout-change", () => {
+			if (this.isPluginEnabled) {
+				this.replaceFileExplorerLeafs();
+			}
+		}));
+
 		// Start auto sync after layout ready
 		this.app.workspace.onLayoutReady(() => {
 			if (this.settings.syncOnStartup) {
@@ -81,6 +90,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 	}
 
 	onunload() {
+		this.isPluginEnabled = false;
 		this.stopAutoSyncTimer();
 
 		// Clean up auto-sync modify timers
@@ -116,7 +126,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 		this.originalGetLeavesOfType = original;
 		const self = this;
 		Workspace.prototype.getLeavesOfType = function (type: string) {
-			if (type === "file-explorer") {
+			if (type === "file-explorer" && self.isPluginEnabled) {
 				return original.call(this, GRIMOIRE_TREE_VIEW);
 			}
 			return original.call(this, type);

@@ -8,7 +8,7 @@ import type {
 	VolumeResponse,
 	ChapterListResponse,
 } from "../types";
-import { FRONTMATTER_KEYS, createOrderedName, sanitizeFileName } from "../utils";
+import { FRONTMATTER_KEYS, sanitizeFileName } from "../utils";
 
 /**
  * Parse YAML frontmatter from markdown content
@@ -221,7 +221,7 @@ export function createSeriesFrontmatter(
 		const links = options.volumes
 			.filter(vol => vol.title)
 			.map(vol => {
-				const folderName = createOrderedName(vol.title!, vol.order);
+				const folderName = sanitizeFileName(vol.title!);
 				const path = `${folderName}/_volume.md`;
 				return formatLink(path, vol.title!, linkStyle);
 			});

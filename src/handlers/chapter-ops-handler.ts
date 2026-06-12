@@ -2,7 +2,7 @@ import { App, TFile, Notice, normalizePath } from "obsidian";
 import type { GrimoireApi } from "../api";
 import type { SyncManager } from "../sync";
 import { ChapterTitleModal } from "../ui";
-import { joinPath, extractOrderFromName } from "../utils";
+import { joinPath } from "../utils";
 
 export class ChapterOpsHandler {
 	constructor(
@@ -50,14 +50,14 @@ export class ChapterOpsHandler {
 					if (volumeIdPrefixed) {
 						const volumeId = String(volumeIdPrefixed);
 						const seriesTitle = seriesFolder.name;
-						const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
-						const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
+						const volumeTitle = volumeFolder.name;
+						const volumeOrder = Number(volCache?.frontmatter?.["order"]) || 0;
 
 						// Save local changes to server only if they are modified
 						for (const sf of sortedFiles) {
 							if (this.syncManager.isLocallyModified(sf.file)) {
 								new Notice(`Saving local changes for ${sf.file.name}...`);
-								const displayOrder = extractOrderFromName(sf.file.basename) ?? 0;
+								const displayOrder = sf.order;
 								await this.syncManager.bidirectionalSync.pushChapter(
 									sf.file,
 									{ id: sf.grimoireId, title: sf.file.basename, order: sf.order },
@@ -144,9 +144,9 @@ export class ChapterOpsHandler {
 						if (volumeIdPrefixed) {
 							const volumeId = String(volumeIdPrefixed);
 							const seriesTitle = seriesFolder.name;
-							const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
-							const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
-							const displayOrder = extractOrderFromName(file.basename) ?? 0;
+							const volumeTitle = volumeFolder.name;
+							const volumeOrder = Number(volCache?.frontmatter?.["order"]) || 0;
+							const displayOrder = Number(cache?.frontmatter?.["order"]) || 0;
 
 							// Save local changes to server only if modified
 							if (this.syncManager.isLocallyModified(file)) {

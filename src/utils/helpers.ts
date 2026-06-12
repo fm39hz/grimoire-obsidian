@@ -13,27 +13,7 @@ export function sanitizeFileName(name: string): string {
 		.trim();
 }
 
-/**
- * Create a folder-safe name with order prefix
- * e.g., "Chapter Title" with order 1 -> "001 - Chapter Title"
- */
-export function createOrderedName(title: string, order: number, padLength = 3): string {
-	const paddedOrder = String(order).padStart(padLength, "0");
-	const safeName = sanitizeFileName(title);
-	return `${paddedOrder} - ${safeName}`;
-}
 
-/**
- * Extract order number from an ordered name
- * e.g., "001 - Chapter Title" -> 1
- */
-export function extractOrderFromName(name: string): number | null {
-	const match = name.match(/^(\d+)\s*-\s*/);
-	if (match && match[1]) {
-		return parseInt(match[1], 10);
-	}
-	return null;
-}
 
 /**
  * Get current timestamp in ISO 8601 format

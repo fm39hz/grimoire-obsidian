@@ -2,7 +2,7 @@ import { App, TFile, TFolder, TAbstractFile, Notice, normalizePath } from "obsid
 import type { GrimoireApi } from "../api";
 import type { SyncManager } from "../sync";
 import type { GrimoireSyncSettings } from "../settings";
-import { joinPath, extractOrderFromName, SERIES_METADATA_FILE, VOLUME_METADATA_FILE } from "../utils";
+import { joinPath, SERIES_METADATA_FILE, VOLUME_METADATA_FILE } from "../utils";
 
 export class VaultEventHandler {
 	private fileIdMap: Map<string, { id: string; type: string }> = new Map();
@@ -115,8 +115,8 @@ export class VaultEventHandler {
 					const seriesId = seriesCache?.frontmatter?.["grimoire_id"];
 					if (seriesId) {
 						try {
-							const volumeTitle = file.name.replace(/^\d+\s*-\s*/, "");
-							const volumeOrder = extractOrderFromName(file.name) ?? 0;
+							const volumeTitle = file.name;
+							const volumeOrder = 0;
 							
 							new Notice(`Creating new volume on server: ${volumeTitle}...`);
 							const volume = await this.api.volumes.create({
@@ -157,7 +157,7 @@ export class VaultEventHandler {
 					if (volumeId && seriesFolder) {
 						try {
 							const title = file.basename;
-							const order = extractOrderFromName(file.basename) ?? 0;
+							const order = 0;
 
 							new Notice(`Creating new chapter on server: ${title}...`);
 							const chapter = await this.api.chapters.create({
@@ -168,8 +168,8 @@ export class VaultEventHandler {
 							});
 							
 							const seriesTitle = seriesFolder.name;
-							const volumeTitle = file.parent.name.replace(/^\d+\s*-\s*/, "");
-							const volumeOrder = extractOrderFromName(file.parent.name) ?? 0;
+							const volumeTitle = file.parent.name;
+							const volumeOrder = Number(volCache?.frontmatter?.["order"]) || 0;
 
 							await this.syncManager.fileManager.writeChapterFile(
 								chapter,
@@ -254,8 +254,9 @@ export class VaultEventHandler {
 					const volumeFolder = file.parent;
 					if (volumeFolder) {
 						new Notice(`Renaming volume on server...`);
-						const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
-						const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
+						const cache = this.app.metadataCache.getFileCache(file);
+						const volumeTitle = volumeFolder.name;
+						const volumeOrder = Number(cache?.frontmatter?.["order"]) || 0;
 						await this.api.volumes.update(mapped.id, {
 							title: volumeTitle,
 							order: volumeOrder

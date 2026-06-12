@@ -464,4 +464,48 @@ export class GrimoireTreeView extends ItemView {
 			}
 		});
 	}
+
+	/**
+	 * Reveal a file/folder in the tree view by expanding its parent folders and scrolling it into view.
+	 * Implements the standard Obsidian File Explorer API for compatibility.
+	 */
+	public revealFile(file: TAbstractFile) {
+		let parent = file.parent;
+		const pathsToExpand: string[] = [];
+		while (parent && !parent.isRoot()) {
+			pathsToExpand.push(parent.path);
+			parent = parent.parent;
+		}
+		pathsToExpand.reverse();
+		for (const path of pathsToExpand) {
+			this.expandedPaths.add(path);
+		}
+
+		this.refreshView();
+
+		this.selectedPaths.clear();
+		this.selectedPaths.add(file.path);
+		this.updateSelectionHighlights();
+
+		try {
+			const el = this.contentEl.querySelector(`.tree-item-self[data-path="${CSS.escape(file.path)}"]`);
+			if (el) {
+				el.scrollIntoView({ block: "center", behavior: "smooth" });
+			}
+		} catch (err) {
+			// Prevent selector/scroll issues
+		}
+	}
+
+	public select(file: TAbstractFile) {
+		this.revealFile(file);
+	}
+
+	public revealInFolder(file: TAbstractFile) {
+		this.revealFile(file);
+	}
+
+	public reveal(file: TAbstractFile) {
+		this.revealFile(file);
+	}
 }

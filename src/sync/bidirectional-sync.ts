@@ -18,7 +18,7 @@ import type {
 	ChapterListResponse,
 } from "../types";
 import { App, TFile, TFolder, normalizePath } from "obsidian";
-import { joinPath, extractOrderFromName } from "../utils";
+import { joinPath } from "../utils";
 import { parseFrontmatter } from "../vault/frontmatter";
 import type { GrimoireSyncSettings } from "../settings";
 
@@ -544,8 +544,8 @@ export class BidirectionalSync {
 		const content = await this.app.vault.read(file);
 		const { frontmatter, content: body } = parseFrontmatter(content);
 
-		const title = String(frontmatter?.["title"] || file.basename.replace(/^\d+\s*-\s*/, ""));
-		const order = Number(frontmatter?.["order"]) || extractOrderFromName(file.basename) || 0;
+		const title = String(frontmatter?.["title"] || file.basename);
+		const order = Number(frontmatter?.["order"]) || 0;
 
 		if (remoteChapter && remoteChapter.id) {
 			// If the chapter exists, we update its metadata (title, order) on the server first.

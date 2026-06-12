@@ -4,7 +4,7 @@ import { FileManager, VaultStructure } from "../vault";
 import { BidirectionalSync, PullProgress } from "./bidirectional-sync";
 import type { SyncResult, SyncState, SeriesResponse } from "../types";
 import type { GrimoireSyncSettings } from "../settings";
-import { joinPath, extractOrderFromName, VOLUME_METADATA_FILE } from "../utils";
+import { joinPath, VOLUME_METADATA_FILE } from "../utils";
 
 export class SyncManager {
 	private api: GrimoireApi;
@@ -199,8 +199,8 @@ export class SyncManager {
 		const volumeId = volCache?.frontmatter?.["grimoire_id"];
 		if (!volumeId) return null;
 
-		const volumeTitle = volumeFolder.name.replace(/^\d+\s*-\s*/, "");
-		const volumeOrder = extractOrderFromName(volumeFolder.name) ?? 0;
+		const volumeTitle = String(volCache?.frontmatter?.["title"] || volumeFolder.name);
+		const volumeOrder = Number(volCache?.frontmatter?.["order"]) || 0;
 		const seriesTitle = seriesFolder.name;
 
 		return {

@@ -5,7 +5,7 @@
 
 import { App, TFolder, TFile, Vault, normalizePath } from "obsidian";
 import { SERIES_METADATA_FILE, VOLUME_METADATA_FILE, MARKDOWN_EXTENSION, FRONTMATTER_KEYS } from "../utils";
-import { sanitizeFileName, createOrderedName, joinPath } from "../utils";
+import { sanitizeFileName, joinPath } from "../utils";
 import {
 	parseSeriesFrontmatter,
 	parseVolumeFrontmatter,
@@ -119,7 +119,7 @@ export class VaultStructure {
 	 */
 	getVolumeFolderPath(seriesTitle: string, volumeTitle: string, volumeOrder: number): string {
 		const seriesPath = this.getSeriesFolderPath(seriesTitle);
-		const volumeFolderName = createOrderedName(volumeTitle, volumeOrder);
+		const volumeFolderName = sanitizeFileName(volumeTitle);
 		return normalizePath(joinPath(seriesPath, volumeFolderName));
 	}
 
