@@ -31,7 +31,7 @@ export default class GrimoireSyncPlugin extends Plugin {
 		await this.loadSettings();
 
 		// Initialize API client if configured
-		this.initializeApi();
+		await this.initializeApi();
 
 		// Register Grimoire Tree View
 		this.registerView(GRIMOIRE_TREE_VIEW, (leaf) => new GrimoireTreeView(leaf, this));
@@ -202,10 +202,11 @@ export default class GrimoireSyncPlugin extends Plugin {
 	/**
 	 * Initialize or reinitialize the API client
 	 */
-	private initializeApi() {
+	private async initializeApi() {
 		if (this.settings.apiBaseUrl) {
 			this.api = new GrimoireApi({ baseUrl: this.settings.apiBaseUrl });
 			this.syncManager = new SyncManager(this.app, this.api, this.settings);
+			await this.syncManager.initialize();
 			this.vaultEventHandler = new VaultEventHandler(
 				this.app,
 				this.syncManager,

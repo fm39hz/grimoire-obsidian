@@ -5,6 +5,7 @@ import { BidirectionalSync, PullProgress } from "./bidirectional-sync";
 import type { SyncResult, SyncState, SeriesResponse } from "../types";
 import type { GrimoireSyncSettings } from "../settings";
 import { joinPath, VOLUME_METADATA_FILE } from "../utils";
+import { SyncIndex } from "./sync-index";
 
 export class SyncManager {
 	private api: GrimoireApi;
@@ -13,14 +14,20 @@ export class SyncManager {
 	public bidirectionalSync: BidirectionalSync;
 	private state: SyncState;
 	public settings: GrimoireSyncSettings;
+	public syncIndex: SyncIndex;
 
 	constructor(private app: App, api: GrimoireApi, settings: GrimoireSyncSettings) {
 		this.api = api;
 		this.settings = settings;
 		this.structure = new VaultStructure(app, settings.syncFolder, settings.imagesFolder);
 		this.fileManager = new FileManager(app, this.structure, api, settings);
-		this.bidirectionalSync = new BidirectionalSync(api, this.fileManager, this.structure, app, settings);
+		this.syncIndex = new SyncIndex(app);
+		this.bidirectionalSync = new BidirectionalSync(api, this.fileManager, this.structure, app, settings, this.syncIndex);
 		this.state = { status: "idle" };
+	}
+
+	async initialize(): Promise<void> {
+		await this.syncIndex.load();
 	}
 
 	/**

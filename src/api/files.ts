@@ -18,7 +18,7 @@ export class FilesApi {
 		refType: AssetRefType = "Content"
 	): Promise<AssetResponse> {
 		return this.client.uploadFile(
-			`/api/v1/files/upload/${seriesId}`,
+			`/api/v1/files/series/${seriesId}`,
 			file,
 			filename,
 			{ refType }

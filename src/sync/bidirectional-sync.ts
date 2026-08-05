@@ -17,10 +17,11 @@ import type {
 	AssetListingDto,
 	ChapterListResponse,
 } from "../types";
-import { App, TFile, TFolder, normalizePath } from "obsidian";
+import { App, TFile, TFolder, normalizePath, Notice } from "obsidian";
 import { joinPath } from "../utils";
-import { parseFrontmatter } from "../vault/frontmatter";
+import { parseFrontmatter, createMarkdownWithFrontmatter } from "../vault/frontmatter";
 import type { GrimoireSyncSettings } from "../settings";
+import { SyncIndex } from "./sync-index";
 
 export interface PullProgress {
 	phase: "series" | "volumes" | "chapters";
@@ -42,8 +43,17 @@ export class BidirectionalSync {
 		private fileManager: FileManager,
 		private structure: VaultStructure,
 		private app: App,
-		private settings?: GrimoireSyncSettings
+		private settings?: GrimoireSyncSettings,
+		private syncIndex?: SyncIndex
 	) {}
+
+	private async getOrCreateSyncIndex(): Promise<SyncIndex> {
+		if (!this.syncIndex) {
+			this.syncIndex = new SyncIndex(this.app);
+			await this.syncIndex.load();
+		}
+		return this.syncIndex;
+	}
 
 	/**
 	 * Pull/Sync all series from/to the API (Bidirectional Sync)
@@ -460,9 +470,37 @@ export class BidirectionalSync {
 				seriesTitle
 			);
 		}
+
+		if (oldFile && this.isLocallyModified(oldFile)) {
+			const conflictPath = oldFile.path.replace(/\.md$/, ".conflict.md");
+			const frontmatter = {
+				grimoire_id: chapter.id,
+				title: `${chapter.title} (Server Conflict)`,
+				grimoire_type: "chapter_conflict",
+				last_synced: new Date().toISOString()
+			};
+			await this.fileManager.writeFile(conflictPath, createMarkdownWithFrontmatter(frontmatter, chapter.markdown ?? ""));
+			new Notice(`Conflict detected! Server version saved to ${conflictPath}`);
+			return;
+		}
+
 		const newFilePath = await this.fileManager.writeChapterFile(chapter, seriesTitle, volumeTitle, volumeOrder, displayOrder);
 		if (oldFile && normalizePath(oldFile.path) !== normalizePath(newFilePath)) {
 			await this.app.fileManager.trashFile(oldFile);
+		}
+
+		if (newFilePath) {
+			const writtenFile = this.app.vault.getAbstractFileByPath(normalizePath(newFilePath));
+			if (writtenFile instanceof TFile) {
+				const writtenContent = await this.app.vault.read(writtenFile);
+				const { content: body } = parseFrontmatter(writtenContent);
+				const syncIndex = await this.getOrCreateSyncIndex();
+				const localHash = await syncIndex.computeHash(body);
+				const remoteHash = await syncIndex.computeHash(chapter.markdown ?? "");
+				
+				syncIndex.setEntry(newFilePath, localHash, remoteHash);
+				await syncIndex.save();
+			}
 		}
 	}
 
@@ -547,10 +585,51 @@ export class BidirectionalSync {
 		const title = String(frontmatter?.["title"] || file.basename);
 		const order = Number(frontmatter?.["order"]) || 0;
 
+		// 1. Resolve Series ID from series metadata file cache to upload images
+		const seriesMetadataPath = this.structure.getSeriesMetadataPath(seriesTitle);
+		const seriesFile = this.app.vault.getAbstractFileByPath(seriesMetadataPath);
+		let seriesId = "";
+		if (seriesFile instanceof TFile) {
+			const cache = this.app.metadataCache.getFileCache(seriesFile);
+			const fm = cache?.frontmatter || parseFrontmatter(await this.app.vault.read(seriesFile)).frontmatter;
+			seriesId = fm?.["grimoire_id"] || "";
+		}
+
+		let updatedBody = body;
+
+		// 2. Scan and upload local images (Wikilinks: ![[image.png]])
+		if (seriesId) {
+			const wikilinkRegex = /!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+			let match;
+			while ((match = wikilinkRegex.exec(body)) !== null) {
+				const linkpath = match[1]?.trim();
+				if (!linkpath) continue;
+				const targetFile = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
+				if (targetFile instanceof TFile) {
+					const arrayBuffer = await this.app.vault.readBinary(targetFile);
+					const asset = await this.api.files.upload(seriesId, arrayBuffer, targetFile.name, "Content");
+					updatedBody = updatedBody.replace(match[0], `![${targetFile.basename}](${asset.id})`);
+				}
+			}
+
+			// Scan and upload local images (Markdown: ![alt](image.png))
+			const markdownRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+			while ((match = markdownRegex.exec(body)) !== null) {
+				const altText = match[1] || "";
+				const linkpath = match[2]?.trim();
+				if (linkpath && !linkpath.startsWith("http://") && !linkpath.startsWith("https://") && !linkpath.startsWith("/api/")) {
+					const targetFile = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
+					if (targetFile instanceof TFile) {
+						const arrayBuffer = await this.app.vault.readBinary(targetFile);
+						const asset = await this.api.files.upload(seriesId, arrayBuffer, targetFile.name, "Content");
+						updatedBody = updatedBody.replace(match[0], `![${altText}](${asset.id})`);
+					}
+				}
+			}
+		}
+
 		if (remoteChapter && remoteChapter.id) {
 			// If the chapter exists, we update its metadata (title, order) on the server first.
-			// Note: The backend's Update endpoint only supports updating metadata (Title, Order)
-			// and does not process rawContent/markdown updates.
 			if (title !== remoteChapter.title || order !== remoteChapter.order) {
 				await this.api.chapters.update(remoteChapter.id, {
 					title,
@@ -560,31 +639,39 @@ export class BidirectionalSync {
 		}
 
 		// To update the content (or create a new chapter), we call the Create (upsert) endpoint.
-		// The server will match on volumeId + order and ingest/update the rawContent.
 		const updatedChapter = await this.api.chapters.create({
 			volumeId,
 			order,
 			title,
-			rawContent: body
+			rawContent: updatedBody
 		}, {
 			format: "markdown",
 			footnoteStyle: this.settings?.footnoteStyle,
 			enableDropcap: this.settings?.enableDropcap
 		});
 
-		if (!skipWrite) {
-			await this.fileManager.writeChapterFile(updatedChapter, seriesTitle, volumeTitle, volumeOrder, displayOrder);
+		let finalFilePath = file.path;
 
-			const newFilePath = this.structure.getChapterFilePath(
-				seriesTitle,
-				volumeTitle,
-				volumeOrder,
-				title,
-				displayOrder !== undefined ? displayOrder : order
-			);
+		if (!skipWrite) {
+			const newFilePath = await this.fileManager.writeChapterFile(updatedChapter, seriesTitle, volumeTitle, volumeOrder, displayOrder);
+			if (newFilePath) {
+				finalFilePath = newFilePath;
+			}
 			if (normalizePath(file.path) !== normalizePath(newFilePath)) {
 				await this.app.fileManager.trashFile(file);
 			}
+		}
+
+		// 3. Update Sync Index with final hash
+		const writtenFile = this.app.vault.getAbstractFileByPath(normalizePath(finalFilePath));
+		if (writtenFile instanceof TFile) {
+			const writtenContent = await this.app.vault.read(writtenFile);
+			const { content: finalBody } = parseFrontmatter(writtenContent);
+			const syncIndex = await this.getOrCreateSyncIndex();
+			const localHash = await syncIndex.computeHash(finalBody);
+			
+			syncIndex.setEntry(finalFilePath, localHash, localHash);
+			await syncIndex.save();
 		}
 	}
 
@@ -592,6 +679,10 @@ export class BidirectionalSync {
 	 * Helper to get local last synced timestamp
 	 */
 	private getLocalLastSynced(file: TFile): number {
+		if (this.syncIndex) {
+			const entry = this.syncIndex.getEntry(file.path);
+			if (entry) return entry.lastSyncedAt;
+		}
 		const cache = this.app.metadataCache.getFileCache(file);
 		const lastSynced = cache?.frontmatter?.["last_synced"];
 		if (!lastSynced) return 0;
@@ -602,9 +693,10 @@ export class BidirectionalSync {
 	 * Helper to check if file was modified locally since last sync
 	 */
 	public isLocallyModified(file: TFile): boolean {
-		const lastSynced = this.getLocalLastSynced(file);
-		if (lastSynced === 0) return true;
-		return file.stat.mtime > lastSynced + 5000;
+		if (!this.syncIndex) return true;
+		const entry = this.syncIndex.getEntry(file.path);
+		if (!entry) return true;
+		return file.stat.mtime > entry.lastSyncedAt + 1000;
 	}
 
 	/**
@@ -612,9 +704,11 @@ export class BidirectionalSync {
 	 */
 	private isRemoteNewer(remoteUpdatedAt: string | null | undefined, file: TFile): boolean {
 		if (!remoteUpdatedAt) return false;
-		const lastSynced = this.getLocalLastSynced(file);
+		if (!this.syncIndex) return true;
+		const entry = this.syncIndex.getEntry(file.path);
+		if (!entry) return true;
 		const remoteTime = new Date(remoteUpdatedAt).getTime();
-		return remoteTime > lastSynced + 5000;
+		return remoteTime > entry.lastSyncedAt + 1000;
 	}
 
 	/**

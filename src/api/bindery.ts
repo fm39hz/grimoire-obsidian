@@ -11,7 +11,7 @@ export class BinderyApi {
 		seriesId: string,
 		data: BinderyRequest
 	): Promise<JobResponse> {
-		return this.client.post<JobResponse>("/api/v1/publishes/export", data, { seriesId });
+		return this.client.post<JobResponse>(`/api/v1/publishes/series/${seriesId}/export`, data);
 	}
 
 	/**
