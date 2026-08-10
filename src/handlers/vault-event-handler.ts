@@ -314,7 +314,10 @@ export class VaultEventHandler {
 		const syncFolder = this.settings.syncFolder;
 		const seriesFolderPath = normalizePath(joinPath(syncFolder, seriesFolderName));
 		const seriesMetadataPath = normalizePath(joinPath(seriesFolderPath, SERIES_METADATA_FILE));
-		return this.app.vault.getAbstractFileByPath(seriesMetadataPath) instanceof TFile;
+		const metadataFile = this.app.vault.getAbstractFileByPath(seriesMetadataPath);
+		if (!(metadataFile instanceof TFile)) return false;
+		const frontmatter = this.app.metadataCache.getFileCache(metadataFile)?.frontmatter;
+		return frontmatter?.["grimoire_synced"] !== false;
 	}
 
 	/**

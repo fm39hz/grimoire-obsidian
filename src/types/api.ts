@@ -79,6 +79,7 @@ export interface SeriesMetadata {
 export interface SeriesResponse {
 	id: string | null;
 	title: string | null;
+	revision?: number;
 	metadata?: SeriesMetadata | null;
 	markdown?: string | null;
 	createdAt?: string | null;
@@ -234,9 +235,24 @@ export interface ExportStructure {
 
 export interface BinderyRequest {
 	format?: ExportFormat;
-	mode?: string | null;
+	mode?: "Anthology" | "Single" | "OnePerVolume" | "CustomGroups" | null;
 	targetVolumeIds?: string[] | null;
+	groups?: ExportGroup[] | null;
 	structure?: ExportStructure | null;
+}
+
+export interface ExportGroup {
+	name: string;
+	targetVolumeIds: string[];
+}
+
+export interface PublishArtifact {
+	name: string;
+	fileName: string;
+	contentType: string;
+	volumeIds: string[];
+	size: number;
+	sha256: string;
 }
 
 // ============================================================================
@@ -249,6 +265,10 @@ export interface JobResponse {
 	downloadUrl?: string | null;
 	error?: string | null;
 	progress?: number | null;
+	stage?: string | null;
+	fileName?: string | null;
+	contentType?: string | null;
+	artifacts?: PublishArtifact[] | null;
 	message?: string | null;
 	createdAt?: string | null;
 	updatedAt?: string | null;
@@ -270,6 +290,7 @@ export interface BookTreeNodeDto {
 	type: BookTreeNodeType;
 	title: string;
 	order?: number | null;
+	contentHash?: string | null;
 	parentId?: string | null;
 	children: BookTreeNodeDto[];
 }
@@ -308,4 +329,3 @@ export interface SyncSeriesRequestDto {
 export interface MergeChaptersRequest {
 	chapterIds: string[];
 }
-

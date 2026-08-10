@@ -128,3 +128,59 @@
 	font-style: italic;
 	opacity: 0.7;
 }
+
+/* Import reconciliation */
+.grimoire-import-inbox,
+.grimoire-plan-review,
+.grimoire-research-evidence {
+	min-width: min(760px, 90vw);
+}
+
+.grimoire-plan-issues {
+	border-left: 3px solid var(--text-warning);
+	padding-left: 12px;
+	margin: 12px 0;
+}
+
+.grimoire-plan-issue,
+.grimoire-plan-operation,
+.grimoire-research-row {
+	padding: 10px;
+	margin: 6px 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+}
+
+.grimoire-plan-operation-heading {
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.grimoire-plan-badge {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	text-transform: uppercase;
+}
+
+.grimoire-plan-operation.disposition-review {
+	border-color: var(--text-warning);
+}
+
+.grimoire-plan-operation.disposition-reject,
+.grimoire-provider-error,
+.grimoire-error {
+	color: var(--text-error);
+}
+
+.grimoire-plan-actions {
+	position: sticky;
+	bottom: 0;
+	background: var(--background-primary);
+	padding-top: 8px;
+}
+
+.grimoire-research-row small {
+	display: block;
+	color: var(--text-muted);
+}

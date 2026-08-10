@@ -6,11 +6,12 @@
 import { App, Menu, Modal, Notice, Plugin, Setting, TFile, TFolder, normalizePath, Workspace, TAbstractFile } from "obsidian";
 import { GrimoireApi } from "./api";
 import { SyncManager } from "./sync";
-import { SeriesSelectionModal, SyncStatusBar, GrimoireTreeView, GRIMOIRE_TREE_VIEW, ChapterTitleModal } from "./ui";
+import { SeriesSelectionModal, SyncStatusBar, GrimoireTreeView, GRIMOIRE_TREE_VIEW, ChapterTitleModal, ImportInboxModal } from "./ui";
 import { DEFAULT_SETTINGS, GrimoireSyncSettings, GrimoireSyncSettingTab } from "./settings";
 import { joinPath, SERIES_METADATA_FILE, VOLUME_METADATA_FILE } from "./utils";
 import { parseFrontmatter } from "./vault/frontmatter";
 import type { BookTreeDto, ChapterResponse } from "./types";
+import type { JobResponse } from "./types";
 import { VaultEventHandler } from "./handlers/vault-event-handler";
 import { ChapterOpsHandler } from "./handlers/chapter-ops-handler";
 
@@ -259,6 +260,12 @@ export default class GrimoireSyncPlugin extends Plugin {
 			id: "open-book-tree",
 			name: "Open Grimoire Book Tree",
 			callback: () => this.initBookTreeView(),
+		});
+
+		this.addCommand({
+			id: "open-import-inbox",
+			name: "Open import inbox",
+			callback: () => new ImportInboxModal(this).open(),
 		});
 	}
 
@@ -521,15 +528,41 @@ export default class GrimoireSyncPlugin extends Plugin {
 				};
 
 				const job = await this.api!.bindery.importBook(seriesMetadata, fileBuffer, file.name);
-				
-				new Notice(`Successfully enqueued import for ${file.name} (Job ID: ${job.jobId})`);
-				
-				await this.app.fileManager.trashFile(file);
+				new Notice(`Import queued for ${file.name} (Job ID: ${job.jobId})`);
+				const completed = await this.waitForImportJob(job.jobId);
+				if (completed.status.toLowerCase() === "completed") {
+					await this.moveStagedFile(file, "Processed");
+					new Notice(`Imported ${file.name}; moved source to Processed.`);
+				} else {
+					await this.moveStagedFile(file, "Failed");
+					new Notice(`Import failed for ${file.name}: ${completed.error ?? "Unknown backend error"}`);
+				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "Unknown error";
-				new Notice(`Failed to upload ${file.name}: ${message}`);
+				new Notice(`Import status is uncertain for ${file.name}; file remains in Stagings: ${message}`);
 			}
 		}
+	}
+
+	private async waitForImportJob(jobId: string, timeoutMs = 10 * 60_000): Promise<JobResponse> {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			const status = await this.api!.jobs.get(jobId);
+			const normalized = status.status.toLowerCase();
+			if (normalized === "completed" || normalized === "failed") return status;
+			await new Promise(resolve => window.setTimeout(resolve, 1_000));
+		}
+		throw new Error(`Timed out waiting for import job ${jobId}`);
+	}
+
+	private async moveStagedFile(file: TFile, destination: "Processed" | "Failed"): Promise<void> {
+		const folderPath = normalizePath(destination);
+		if (!this.app.vault.getAbstractFileByPath(folderPath)) await this.app.vault.createFolder(folderPath);
+		let target = normalizePath(`${folderPath}/${file.name}`);
+		if (this.app.vault.getAbstractFileByPath(target)) {
+			target = normalizePath(`${folderPath}/${file.basename}-${Date.now()}.${file.extension}`);
+		}
+		await this.app.vault.rename(file, target);
 	}
 
 	refreshBookTreeView() {
@@ -579,4 +612,3 @@ export default class GrimoireSyncPlugin extends Plugin {
 
 
 }
-

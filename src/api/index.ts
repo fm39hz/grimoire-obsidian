@@ -9,6 +9,8 @@ import { ChaptersApi } from "./chapters";
 import { FilesApi } from "./files";
 import { BinderyApi } from "./bindery";
 import { JobsApi } from "./jobs";
+import { ImportsApi } from "./imports";
+import { ResearchApi } from "./research";
 
 export { ApiClient, ApiError } from "./client";
 export type { ApiClientConfig } from "./client";
@@ -18,6 +20,8 @@ export { ChaptersApi } from "./chapters";
 export { FilesApi } from "./files";
 export { BinderyApi } from "./bindery";
 export { JobsApi } from "./jobs";
+export { ImportsApi } from "./imports";
+export { ResearchApi } from "./research";
 
 /**
  * Unified API interface providing access to all endpoints
@@ -31,6 +35,8 @@ export class GrimoireApi {
 	public readonly files: FilesApi;
 	public readonly bindery: BinderyApi;
 	public readonly jobs: JobsApi;
+	public readonly imports: ImportsApi;
+	public readonly research: ResearchApi;
 
 	constructor(config: ApiClientConfig) {
 		this.client = new ApiClient(config);
@@ -40,6 +46,8 @@ export class GrimoireApi {
 		this.files = new FilesApi(this.client);
 		this.bindery = new BinderyApi(this.client);
 		this.jobs = new JobsApi(this.client);
+		this.imports = new ImportsApi(this.client);
+		this.research = new ResearchApi(this.client);
 	}
 
 	/**
