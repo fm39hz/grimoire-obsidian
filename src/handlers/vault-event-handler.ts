@@ -62,7 +62,9 @@ export class VaultEventHandler {
 				console.debug(`Automatically pushed modified chapter: ${file.name}`);
 				this.refreshBookTreeView();
 			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
 				console.error(`Failed to auto-push modified chapter: ${file.name}`, err);
+				await this.syncManager.recordSyncError(file.path, message);
 			}
 		}, 3000); // 3 seconds debounce
 

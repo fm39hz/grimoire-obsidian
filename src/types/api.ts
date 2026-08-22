@@ -33,20 +33,55 @@ export interface TextRun {
 	isBold: boolean;
 	isItalic: boolean;
 	footnoteId?: string | null;
+	isStrikethrough?: boolean;
+	isHighlight?: boolean;
+	isCode?: boolean;
 }
 
 export interface Segment {
 	id: string | null;
+	$type?: SegmentType;
 }
 
+export type SegmentType = "Text" | "Image" | "Divider" | "Footnote" | "Table";
+
 export interface TextSegment extends Segment {
+	$type?: "Text";
 	runs: TextRun[] | null;
 }
 
-export interface FootnoteSegment {
-	id: string | null;
+export interface ImageSegment extends Segment {
+	$type?: "Image";
+	assetKey: string;
+	caption?: string | null;
+}
+
+export interface DividerSegment extends Segment {
+	$type?: "Divider";
+	style?: string;
+}
+
+export interface TableCell {
+	runs: TextRun[] | null;
+}
+
+export interface TableSegment extends Segment {
+	$type?: "Table";
+	header: TableCell[];
+	rows: TableCell[][];
+}
+
+export interface FootnoteSegment extends Segment {
+	$type?: "Footnote";
 	segments: TextSegment[] | null;
 }
+
+export type AnySegment =
+	| TextSegment
+	| ImageSegment
+	| DividerSegment
+	| FootnoteSegment
+	| TableSegment;
 
 // ============================================================================
 // Content Response (used by /content endpoints)
@@ -293,6 +328,33 @@ export interface BookTreeNodeDto {
 	contentHash?: string | null;
 	parentId?: string | null;
 	children: BookTreeNodeDto[];
+}
+
+// ============================================================================
+// Restructure Types
+// ============================================================================
+
+export interface MoveNodeOp {
+	$type: "moveNode";
+	nodeId: string;
+	newParentId: string;
+	newOrder: number;
+}
+
+export interface ReorderSiblingsOp {
+	$type: "reorderSiblings";
+	parentId: string;
+	orderedChildIds: string[];
+}
+
+export type RestructureOp = MoveNodeOp | ReorderSiblingsOp;
+
+// ============================================================================
+// Merge Chapter Types
+// ============================================================================
+
+export interface MergeChaptersRequest {
+	chapterIds: string[];
 }
 
 export interface BookTreeDto {

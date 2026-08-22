@@ -49,6 +49,14 @@ export class SyncManager {
 	}
 
 	/**
+	 * Record a per-file sync error so the tree view can surface it.
+	 */
+	async recordSyncError(filePath: string, message: string): Promise<void> {
+		this.syncIndex.setError(filePath, message);
+		await this.syncIndex.save();
+	}
+
+	/**
 	 * Check if currently syncing
 	 */
 	isSyncing(): boolean {

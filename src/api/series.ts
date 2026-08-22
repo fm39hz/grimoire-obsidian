@@ -11,6 +11,7 @@ import type {
 	PagedResult,
 	VolumeResponse,
 	BookTreeDto,
+	RestructureOp,
 	SyncSeriesRequestDto,
 } from "../types";
 
@@ -153,5 +154,18 @@ export class SeriesApi {
 	 */
 	async getTree(id: string): Promise<BookTreeDto> {
 		return this.client.get<BookTreeDto>(`/api/v1/series/${id}/tree`);
+	}
+
+	/**
+	 * Apply atomic restructuring operations to a series tree.
+	 * Ops use the wire `$type` discriminator, e.g.:
+	 *   { $type: "moveNode", nodeId, newParentId, newOrder }
+	 *   { $type: "reorderSiblings", parentId, orderedChildIds }
+	 */
+	async restructure(id: string, operations: RestructureOp[]): Promise<BookTreeDto> {
+		return this.client.post<BookTreeDto>(`/api/v1/series/${id}/restructure`, {
+			seriesId: id,
+			operations
+		});
 	}
 }

@@ -1,14 +1,17 @@
 import { ItemView, WorkspaceLeaf, TFile, TFolder, TAbstractFile, Notice, setIcon, Menu } from "obsidian";
 import type GrimoireSyncPlugin from "../main";
 import { SERIES_METADATA_FILE, VOLUME_METADATA_FILE } from "../utils";
+import type { BookTreeNodeDto, RestructureOp } from "../types";
+import { ConflictResolverModal } from "./conflict-resolver-modal";
+import { VolumePickerModal } from "./volume-picker-modal";
 
 export const GRIMOIRE_TREE_VIEW = "grimoire-book-tree";
 
 export class GrimoireTreeView extends ItemView {
 	private plugin: GrimoireSyncPlugin;
-	private expandedPaths: Set<string> = new Set();
 	private selectedPaths: Set<string> = new Set();
 	private lastClickedPath: string | null = null;
+	private expandedPaths: Set<string> = new Set();
 	private debounceTimer: number | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: GrimoireSyncPlugin) {
@@ -197,6 +200,19 @@ export class GrimoireTreeView extends ItemView {
 		// Show a visual badge for desynced series
 		if (meta.type === "series" && !this.plugin.isSeriesSynced(folder)) {
 			innerEl.createSpan({ cls: "grimoire-desynced-badge", text: " [desynced]" });
+		}
+
+		// Aggregate status dot for series/volume folders
+		if (meta.type === "series" || meta.type === "volume") {
+			const { state, conflicts } = this.computeFolderStatus(folder);
+			if (state !== "synced") {
+				const folderDot = titleEl.createDiv({ cls: `grimoire-status-dot status-${state}` });
+				folderDot.setAttribute("title",
+					state === "conflict"
+						? `${conflicts} unresolved conflict(s) inside`
+						: state === "error" ? "Contains chapters with sync errors"
+						: "Contains unsaved local changes");
+			}
 		}
 
 		const childrenEl = folderEl.createDiv({ cls: "tree-item-children nav-folder-children" });
@@ -395,6 +411,51 @@ export class GrimoireTreeView extends ItemView {
 			}
 		}
 
+		// Resolve conflicts entry for folders with pending conflicts
+		if (selectedFiles.length <= 1 && file instanceof TFolder) {
+			const { conflicts } = this.computeFolderStatus(file);
+			if (conflicts > 0) {
+				menu.addSeparator();
+				menu.addItem((item) => {
+					item
+						.setTitle(`Resolve conflicts (${conflicts})…`)
+						.setIcon("shield-question")
+						.onClick(() => {
+							new ConflictResolverModal(this.plugin, file.path, () => this.refreshView()).open();
+						});
+				});
+			}
+		}
+
+		// Chapter structure ops: move to another volume, reorder among siblings
+		if (selectedFiles.length <= 1 && file instanceof TFile) {
+			const chapterMeta = this.getFileMetadata(file);
+			if (chapterMeta?.type === "chapter") {
+				menu.addSeparator();
+				menu.addItem((item) => {
+					item
+						.setTitle("Move to another volume…")
+						.setIcon("corner-down-right")
+						.onClick(() => void this.moveChapterToVolume(file));
+				});
+
+				const order = this.getSiblingChapterFiles(file);
+				const idx = order.findIndex(f => f.path === file.path);
+				if (idx > 0) {
+					menu.addItem((item) => {
+						item.setTitle("Reorder up").setIcon("arrow-up")
+							.onClick(() => void this.reorderChapters(order, idx, idx - 1));
+					});
+				}
+				if (idx !== -1 && idx < order.length - 1) {
+					menu.addItem((item) => {
+						item.setTitle("Reorder down").setIcon("arrow-down")
+							.onClick(() => void this.reorderChapters(order, idx, idx + 1));
+					});
+				}
+			}
+		}
+
 		// Add delete option for all selections
 		menu.addSeparator();
 		menu.addItem((item) => {
@@ -414,6 +475,20 @@ export class GrimoireTreeView extends ItemView {
 
 	private updateChapterStatusIndicator(file: TFile, dotEl: HTMLElement) {
 		dotEl.className = "grimoire-status-dot";
+
+		if (this.hasConflict(file)) {
+			dotEl.addClass("status-conflict");
+			dotEl.setAttribute("title", "Unresolved conflict — server copy saved as .conflict.md");
+			return;
+		}
+
+		const lastError = this.plugin.syncManager?.syncIndex.getEntry(file.path)?.lastError;
+		if (lastError) {
+			dotEl.addClass("status-error");
+			dotEl.setAttribute("title", `Last sync failed: ${lastError}`);
+			return;
+		}
+
 		const isModified = this.plugin.syncManager?.isLocallyModified(file);
 		if (isModified) {
 			dotEl.addClass("status-modified");
@@ -422,6 +497,194 @@ export class GrimoireTreeView extends ItemView {
 			dotEl.addClass("status-synced");
 			dotEl.setAttribute("title", "Synchronized");
 		}
+	}
+
+	/** Worst-case status across all chapters under a folder: conflict > error > modified > synced. */
+	private computeFolderStatus(folder: TFolder): { state: string; conflicts: number } {
+		let state = "synced";
+		let conflicts = 0;
+
+		const walk = (node: TAbstractFile) => {
+			if (node instanceof TFile && node.extension === "md") {
+				if (node.name.endsWith(".conflict.md")) {
+					conflicts++;
+					state = "conflict";
+					return;
+				}
+				const cache = this.app.metadataCache.getFileCache(node);
+				if (cache?.frontmatter?.["grimoire_type"] !== "chapter") return;
+
+				const hasErr = this.plugin.syncManager?.syncIndex.getEntry(node.path)?.lastError;
+				if (hasErr && this.rankOf(state) < this.rankOf("error")) {
+					state = "error";
+				} else if (this.plugin.syncManager?.isLocallyModified(node) && this.rankOf(state) < this.rankOf("modified")) {
+					state = "modified";
+				}
+			} else if (node instanceof TFolder) {
+				for (const child of node.children) walk(child);
+			}
+		};
+
+		for (const child of folder.children) walk(child);
+		return { state, conflicts };
+	}
+
+	private rankOf(state: string): number {
+		return state === "conflict" ? 3 : state === "error" ? 2 : state === "modified" ? 1 : 0;
+	}
+
+	private hasConflict(file: TFile): boolean {
+		const conflictPath = file.path.replace(/\.md$/, ".conflict.md");
+		return this.app.vault.getAbstractFileByPath(conflictPath) instanceof TFile;
+	}
+
+	// ── Restructure helpers ───────────────────────────────────────────────────
+
+	private getFrontmatterId(file: TFile): string {
+		return String(this.app.metadataCache.getFileCache(file)?.frontmatter?.["grimoire_id"] ?? "");
+	}
+
+	private getSiblingChapterFiles(file: TFile): TFile[] {
+		if (!file.parent) return [];
+		return file.parent.children
+			.filter((c): c is TFile => c instanceof TFile && c.extension === "md")
+			.filter(f => this.getFileMetadata(f)?.type === "chapter")
+			.sort((a, b) => {
+				const ma = this.getFileMetadata(a);
+				const mb = this.getFileMetadata(b);
+				return (ma?.order ?? 0) - (mb?.order ?? 0);
+			});
+	}
+
+	private async resolveSeriesId(volumeFolder: TFolder | null): Promise<string> {
+		const seriesFolder = volumeFolder?.parent;
+		if (!seriesFolder) return "";
+		const seriesMd = seriesFolder.children.find(
+			c => c instanceof TFile && c.name === SERIES_METADATA_FILE
+		) as TFile | undefined;
+		if (!seriesMd) return "";
+
+		return String(this.app.metadataCache.getFileCache(seriesMd)?.frontmatter?.["grimoire_id"] ?? "");
+	}
+
+	private async restructure(seriesId: string, operations: RestructureOp[]): Promise<boolean> {
+		const api = this.plugin.api;
+		const syncManager = this.plugin.syncManager;
+		if (!api || !syncManager) {
+			new Notice("Grimoire API is not configured.");
+			return false;
+		}
+
+		try {
+			await api.series.restructure(seriesId, operations);
+			await syncManager.pullSeries(seriesId);
+			this.refreshView();
+			new Notice("Structure updated.");
+			return true;
+		} catch (err) {
+			new Notice(`Restructure failed: ${err instanceof Error ? err.message : String(err)}`);
+			return false;
+		}
+	}
+
+	private async reorderChapters(ordered: TFile[], from: number, to: number): Promise<void> {
+		const file = ordered[from];
+		if (!file || !file.parent) return;
+
+		const ctx = this.plugin.syncManager?.getChapterSyncContext(file);
+		if (!ctx) {
+			new Notice("Cannot determine the volume of this chapter.");
+			return;
+		}
+
+		const seriesId = await this.resolveSeriesId(file.parent ?? null);
+		if (!seriesId) {
+			new Notice("Cannot determine the series of this chapter.");
+			return;
+		}
+
+		const swapped = [...ordered];
+		swapped.splice(from, 1);
+		swapped.splice(to, 0, file);
+
+		const orderedChildIds = swapped
+			.map(f => this.getFrontmatterId(f))
+			.filter(id => id.length > 0);
+
+		await this.restructure(seriesId, [{
+			$type: "reorderSiblings",
+			parentId: ctx.volumeId,
+			orderedChildIds,
+		}]);
+	}
+
+	private async moveChapterToVolume(file: TFile): Promise<void> {
+		const ctx = this.plugin.syncManager?.getChapterSyncContext(file);
+		if (!ctx) {
+			new Notice("Cannot determine the current volume of this chapter.");
+			return;
+		}
+
+		const seriesFolder = file.parent?.parent;
+		if (!seriesFolder) return;
+
+		const targets: { id: string; title: string }[] = [];
+		for (const child of seriesFolder.children) {
+			if (!(child instanceof TFolder) || child.path === file.parent?.path) continue;
+			const volMd = child.children.find(c => c instanceof TFile && c.name === VOLUME_METADATA_FILE) as TFile | undefined;
+			if (!volMd) continue;
+			const id = this.getFrontmatterId(volMd);
+			const title = String(this.app.metadataCache.getFileCache(volMd)?.frontmatter?.["title"] || child.name);
+			if (id) targets.push({ id, title });
+		}
+
+		if (targets.length === 0) {
+			new Notice("No other volume to move to in this series.");
+			return;
+		}
+
+		new VolumePickerModal(this.app, targets, async (target) => {
+			const seriesId = await this.resolveSeriesId(file.parent ?? null);
+			if (!seriesId) {
+				new Notice("Cannot determine the series of this chapter.");
+				return;
+			}
+
+			let newOrder = 1;
+			try {
+				const tree = this.plugin.api
+					? await this.plugin.api.series.getTree(seriesId)
+					: null;
+				const targetNode = tree ? this.findVolumeNode(tree.root, target.id) : null;
+				const orders = (targetNode?.children ?? []).map(c => c.order ?? 0);
+				newOrder = orders.length ? Math.max(...orders) + 1 : 1;
+			} catch {
+				// Fall back to order 1 when the tree is unavailable.
+			}
+
+			const nodeId = this.getFrontmatterId(file);
+			if (!nodeId) {
+				new Notice("This chapter has no Grimoire id yet — sync it first.");
+				return;
+			}
+
+			await this.restructure(seriesId, [{
+				$type: "moveNode",
+				nodeId,
+				newParentId: target.id,
+				newOrder,
+			}]);
+		}).open();
+	}
+
+	private findVolumeNode(node: BookTreeNodeDto, volumeId: string): BookTreeNodeDto | null {
+		if (node.id === volumeId) return node;
+		for (const child of node.children ?? []) {
+			const found = this.findVolumeNode(child, volumeId);
+			if (found) return found;
+		}
+		return null;
+
 	}
 
 	/**

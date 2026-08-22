@@ -4,6 +4,7 @@ export interface SyncIndexEntry {
 	localHash: string;
 	remoteHash: string;
 	lastSyncedAt: number;
+	lastError?: string;
 }
 
 export class SyncIndex {
@@ -72,8 +73,24 @@ export class SyncIndex {
 		this.entries.set(normalizePath(filePath), {
 			localHash,
 			remoteHash,
-			lastSyncedAt: Date.now()
+			lastSyncedAt: Date.now(),
+			lastError: undefined
 		});
+	}
+
+	setError(filePath: string, message: string): void {
+		const normalized = normalizePath(filePath);
+		const entry = this.entries.get(normalized);
+		if (entry) {
+			entry.lastError = message;
+		} else {
+			this.entries.set(normalized, {
+				localHash: "",
+				remoteHash: "",
+				lastSyncedAt: 0,
+				lastError: message
+			});
+		}
 	}
 
 	removeEntry(filePath: string): void {
